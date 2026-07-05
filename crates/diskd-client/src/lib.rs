@@ -644,7 +644,7 @@ mod tests {
     #[test]
     fn builds_biquery_request() {
         let paths = vec!["/Projects/01PROJECT/sheet.xlsx".to_owned()];
-        let request = biquery_request("SELECT * FROM Sheet1", &paths);
+        let request = biquery_request("what is the total amount?", &paths);
 
         assert_eq!(request.method, "paths/tools/bi-query");
         assert_eq!(
@@ -652,7 +652,7 @@ mod tests {
             vec![
                 RpcParam {
                     name: "query".to_owned(),
-                    value: RpcValue::String("SELECT * FROM Sheet1".to_owned()),
+                    value: RpcValue::String("what is the total amount?".to_owned()),
                 },
                 RpcParam {
                     name: "paths".to_owned(),

@@ -14,7 +14,7 @@ macOS, and Windows.
 - Browse Drive paths with `ls`, `glob`, and `stat`.
 - Stream file bytes with `cat`.
 - Search indexed content with `grep` and `vsearch`.
-- Query CSV, TSV, XLS, and XLSX files with `biquery`.
+- Ask natural-language questions over CSV, TSV, XLS, and XLSX files with `biquery`.
 - Upload files, create folders, rename, copy, remove, and one-way sync folders.
 - Run an embedded MCP stdio server with Drive tools for MCP clients.
 - Update itself from signed GitHub release checksums.
@@ -31,7 +31,7 @@ curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh 
 Pin a release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh | DISKD_VERSION=v0.1.3 sh
+curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh | DISKD_VERSION=v0.1.4 sh
 ```
 
 Install into a custom directory:
@@ -55,7 +55,22 @@ command. Checks are skipped for `--json`, `--quiet`, and MCP stdio serving.
 
 ## Quick Start
 
-Authenticate with a bearer token:
+Authenticate through the browser:
+
+```sh
+diskd login
+```
+
+This opens `https://app.iosya.com/oauth-apps`, creates diskd CLI credentials
+from your logged-in browser session, and stores the returned bearer token.
+
+Use the development app host:
+
+```sh
+diskd login --dev
+```
+
+Authenticate with an already-issued bearer token:
 
 ```sh
 diskd login --token "$APIS_ACCESS_TOKEN"
@@ -109,7 +124,7 @@ diskd vsearch "semantic query" [path...] --top 10
 diskd cat path/to/file > local-file
 diskd read path/to/file --parts-limit 3
 diskd stat path/to/file
-diskd biquery 'SELECT * FROM "table"' sheet.csv
+diskd biquery "what is the total amount?" sheet.csv
 diskd upload ./file.txt --dest docs --force
 diskd sync ./local-folder --dest docs --once
 diskd update

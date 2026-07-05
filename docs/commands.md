@@ -23,7 +23,17 @@ Global flags must be placed before the subcommand.
 
 ### `login`
 
-Store a token:
+Open browser login:
+
+```sh
+diskd login
+diskd login --dev
+```
+
+By default, `diskd login` opens `https://app.iosya.com/oauth-apps`. The `--dev`
+flag uses `https://app.upgraide.dev/oauth-apps`.
+
+Store an existing token:
 
 ```sh
 diskd login --token "$APIS_ACCESS_TOKEN"
@@ -78,7 +88,7 @@ Most human-facing commands perform a short startup update check. If a newer
 release exists, `diskd` prints a yellow stderr notice:
 
 ```text
-diskd 0.1.3 is available; current is 0.1.2. Run `diskd update`.
+diskd 0.1.4 is available; current is 0.1.3. Run `diskd update`.
 ```
 
 Startup checks are skipped for `--json`, `--quiet`, and `diskd mcp serve`.
@@ -204,10 +214,12 @@ Calls `paths/tools/inode-ls`, the deployed path-based metadata surface.
 ### `biquery`
 
 ```sh
-diskd --json biquery 'SELECT * FROM "table" LIMIT 5' docs/table.csv
+diskd --json biquery "what is the total amount?" docs/table.csv
+diskd --json biquery "total amount grouped by name" docs/table.csv
 ```
 
-Calls `paths/tools/bi-query` for indexed CSV, TSV, XLS, and XLSX files.
+Calls `paths/tools/bi-query` for indexed CSV, TSV, XLS, and XLSX files. The
+query is a natural-language question; Drive generates and runs the SQL.
 
 ## Write and Manage Commands
 

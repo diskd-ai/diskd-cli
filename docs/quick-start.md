@@ -14,7 +14,7 @@ curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh 
 Pinned release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh | DISKD_VERSION=v0.1.3 sh
+curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh | DISKD_VERSION=v0.1.4 sh
 ```
 
 Confirm the binary:
@@ -36,6 +36,15 @@ diskd update
 ```
 
 ## 2. Configure API Access
+
+Browser login:
+
+```sh
+diskd login
+```
+
+This opens `https://app.iosya.com/oauth-apps`. Use `diskd login --dev` for
+`https://app.upgraide.dev/oauth-apps`.
 
 For an already-issued bearer token:
 
@@ -131,11 +140,9 @@ path when the Drive backend has not expanded directory inodes for vector search.
 ```sh
 printf 'name,amount\nalpha,10\nbeta,20\n' > table.csv
 diskd upload ./table.csv --dest notes --force
-diskd --json biquery 'SELECT SUM(amount) AS total FROM "table"' notes/table.csv
+diskd --json biquery "what is the total amount?" notes/table.csv
+diskd --json biquery "total amount grouped by name" notes/table.csv
 ```
 
-The table name is produced by Drive indexing. If unsure, inspect SQLite tables:
-
-```sh
-diskd --json biquery "SELECT name FROM sqlite_master WHERE type='table'" notes/table.csv
-```
+`biquery` takes a natural-language question. Drive reads the spreadsheet schema,
+generates SQL internally, and returns the result table.

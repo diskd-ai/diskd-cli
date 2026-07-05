@@ -2,10 +2,11 @@ use std::cmp::Ordering;
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{self, BufRead, BufReader, Cursor, IsTerminal, Write};
+use std::io::{self, BufRead, BufReader, Cursor, IsTerminal, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -19,7 +20,8 @@ use diskd_client::{
 use diskd_config::{
     decode_jwt_identity, format_config_document, format_stored_credentials, normalize_drive_path,
     parse_client_credentials_file, parse_config_document, parse_stored_credentials,
-    resolve_setting, DiskdConfig, DriveContext, ProjectId, StoredCredentials,
+    resolve_setting, ClientCredentialsFile, DiskdConfig, DriveContext, ProjectId,
+    StoredCredentials,
 };
 use flate2::read::GzDecoder;
 use reqwest::blocking::Client as HttpClient;
@@ -30,11 +32,14 @@ use sha2::{Digest, Sha256};
 use tar::Archive;
 
 const DEFAULT_BASE_URL: &str = "https://apis.iosya.com";
+const DEFAULT_LOGIN_APP_URL: &str = "https://app.iosya.com/oauth-apps";
+const DEV_LOGIN_APP_URL: &str = "https://app.upgraide.dev/oauth-apps";
 const GITHUB_API_BASE_URL: &str = "https://api.github.com";
 const GITHUB_REPOSITORY: &str = "diskd-ai/diskd-cli";
 const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_millis(900);
 const UPDATE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 const UPDATE_CHECK_DISABLE_ENV: &str = "DISKD_NO_UPDATE_CHECK";
+const BROWSER_LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 const TOKEN_SCOPES: &[&str] = &[
     "drive:read",
     "drive:write",
@@ -163,10 +168,17 @@ enum Command {
         command: McpCommand,
     },
     Login {
-        #[arg(long)]
+        #[arg(long, help = "Store an existing bearer token")]
         token: Option<String>,
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Exchange a downloaded credentials.json file for a bearer token"
+        )]
         credentials_file: Option<PathBuf>,
+        #[arg(long, help = "Open the development app host for browser login")]
+        dev: bool,
+        #[arg(long, help = "Override the OAuth Apps URL used by browser login")]
+        app_url: Option<String>,
     },
     Logout,
     Whoami,
@@ -264,10 +276,14 @@ fn run() -> Result<()> {
         Command::Login {
             token,
             credentials_file,
+            dev,
+            app_url,
         } => login(
             &mut state,
             token.as_deref(),
             credentials_file.as_deref(),
+            *dev,
+            app_url.as_deref(),
             cli.quiet,
         ),
         Command::Logout => logout(&state, cli.quiet),
@@ -431,11 +447,13 @@ fn run_drive_command(cli: &Cli, state: &RuntimeState) -> Result<()> {
     }
 }
 
-/// Logs in with either a raw token or the provided OAuth client-credentials fixture.
+/// Logs in with a raw token, keyfile, or browser-created diskd CLI credentials.
 fn login(
     state: &mut RuntimeState,
     token: Option<&str>,
     credentials_file: Option<&Path>,
+    dev: bool,
+    app_url: Option<&str>,
     quiet: bool,
 ) -> Result<()> {
     ensure_private_home(&state.home_dir)?;
@@ -446,38 +464,52 @@ fn login(
                 format!("failed to read credentials fixture {}", path.display())
             })?;
             let fixture = parse_client_credentials_file(&document)?;
-            state.config.base_url = Some(fixture.apis_url.clone());
-            let params = ClientCredentialsTokenParams {
-                issuer: fixture.issuer,
-                client_id: fixture.client_id,
-                client_secret: fixture.client_secret,
-                audience: fixture.audience,
-                scopes: TOKEN_SCOPES
-                    .iter()
-                    .map(|scope| (*scope).to_owned())
-                    .collect(),
-            };
-            let token = match request_client_credentials_token(&params) {
-                Ok(token) => token,
-                Err(error) if error.to_string().contains("invalid_scope") => {
-                    if !quiet {
-                        eprintln!(
-                            "requested gateway scopes were rejected by issuer; retrying with client defaults"
-                        );
-                    }
-                    request_client_credentials_token(&ClientCredentialsTokenParams {
-                        scopes: Vec::new(),
-                        ..params
-                    })?
-                }
-                Err(error) => return Err(error.into()),
-            };
-            save_config(state)?;
-            token
+            request_and_store_client_credentials_token(state, fixture, quiet)?
         }
         (Some(_), Some(_)) => bail!("use either --token or --credentials-file, not both"),
-        (None, None) => bail!("login requires --token or --credentials-file"),
+        (None, None) => browser_login(state, dev, app_url, quiet)?,
     };
+    store_access_token(state, access_token, quiet)
+}
+
+/// Exchanges client credentials for a bearer token and stores the gateway URL.
+fn request_and_store_client_credentials_token(
+    state: &mut RuntimeState,
+    fixture: ClientCredentialsFile,
+    quiet: bool,
+) -> Result<String> {
+    state.config.base_url = Some(fixture.apis_url.clone());
+    let params = ClientCredentialsTokenParams {
+        issuer: fixture.issuer,
+        client_id: fixture.client_id,
+        client_secret: fixture.client_secret,
+        audience: fixture.audience,
+        scopes: TOKEN_SCOPES
+            .iter()
+            .map(|scope| (*scope).to_owned())
+            .collect(),
+    };
+    let token = match request_client_credentials_token(&params) {
+        Ok(token) => token,
+        Err(error) if error.to_string().contains("invalid_scope") => {
+            if !quiet {
+                eprintln!(
+                    "requested gateway scopes were rejected by issuer; retrying with client defaults"
+                );
+            }
+            request_client_credentials_token(&ClientCredentialsTokenParams {
+                scopes: Vec::new(),
+                ..params
+            })?
+        }
+        Err(error) => return Err(error.into()),
+    };
+    save_config(state)?;
+    Ok(token)
+}
+
+/// Persists a bearer token in the private credentials file.
+fn store_access_token(state: &RuntimeState, access_token: String, quiet: bool) -> Result<()> {
     if access_token.is_empty() {
         bail!("login token must not be empty");
     }
@@ -494,6 +526,293 @@ fn login(
         eprintln!("stored credentials in {}", state.credentials_path.display());
     }
     Ok(())
+}
+
+/// Runs browser login by opening the app and waiting for credentials on localhost.
+fn browser_login(
+    state: &mut RuntimeState,
+    dev: bool,
+    app_url: Option<&str>,
+    quiet: bool,
+) -> Result<String> {
+    let listener = TcpListener::bind("127.0.0.1:0").context("failed to bind login callback")?;
+    listener
+        .set_nonblocking(true)
+        .context("failed to configure login callback")?;
+    let callback_url = format!("http://{}/callback", listener.local_addr()?);
+    let login_state = make_browser_login_state()?;
+    let login_url = browser_login_url(
+        resolve_login_app_url(dev, app_url)?,
+        &callback_url,
+        &login_state,
+    );
+
+    if !quiet {
+        eprintln!("opening {login_url}");
+    }
+    if let Err(error) = open_browser(&login_url) {
+        eprintln!("failed to open browser automatically: {error:#}");
+        eprintln!("open this URL to continue diskd login:\n{login_url}");
+    }
+
+    let fixture = wait_for_browser_credentials(&listener, &login_state, BROWSER_LOGIN_TIMEOUT)?;
+    request_and_store_client_credentials_token(state, fixture, quiet)
+}
+
+/// Resolves the app URL used by browser login.
+fn resolve_login_app_url(dev: bool, app_url: Option<&str>) -> Result<&str> {
+    if dev && app_url.is_some() {
+        bail!("use either --dev or --app-url, not both");
+    }
+    if let Some(url) = app_url {
+        if url.trim().is_empty() {
+            bail!("--app-url must not be empty");
+        }
+        return Ok(url.trim());
+    }
+    Ok(if dev {
+        DEV_LOGIN_APP_URL
+    } else {
+        DEFAULT_LOGIN_APP_URL
+    })
+}
+
+/// Builds the OAuth Apps deep link consumed by the web app.
+fn browser_login_url(app_url: &str, callback_url: &str, state: &str) -> String {
+    let separator = if app_url.contains('?') { '&' } else { '?' };
+    format!(
+        "{app_url}{separator}source=diskd-cli&callback={}&state={}",
+        percent_encode(callback_url),
+        percent_encode(state)
+    )
+}
+
+/// Creates a per-run callback state for the local browser login handshake.
+fn make_browser_login_state() -> Result<String> {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before UNIX epoch")?
+        .as_nanos();
+    Ok(format!("{}-{nanos}", std::process::id()))
+}
+
+/// Opens the browser using the current platform's standard launcher.
+fn open_browser(url: &str) -> Result<()> {
+    if let Ok(command) = env::var("DISKD_BROWSER") {
+        if !command.trim().is_empty() {
+            return run_browser_command(command.trim(), &[url]);
+        }
+    }
+
+    open_default_browser(url)
+}
+
+/// Opens the URL with the native browser launcher for the current platform.
+#[cfg(target_os = "macos")]
+fn open_default_browser(url: &str) -> Result<()> {
+    run_browser_command("open", &[url])
+}
+
+/// Opens the URL with the native browser launcher for the current platform.
+#[cfg(target_os = "windows")]
+fn open_default_browser(url: &str) -> Result<()> {
+    run_browser_command("cmd", &["/C", "start", "", url])
+}
+
+/// Opens the URL with the native browser launcher for the current platform.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn open_default_browser(url: &str) -> Result<()> {
+    run_browser_command("xdg-open", &[url])
+}
+
+/// Returns a visible error on platforms without a known browser launcher.
+#[cfg(not(any(target_os = "macos", target_os = "windows", unix)))]
+fn open_default_browser(_url: &str) -> Result<()> {
+    bail!("opening a browser is not supported on this platform")
+}
+
+/// Runs a browser launcher and converts non-zero exits into visible errors.
+fn run_browser_command(command: &str, args: &[&str]) -> Result<()> {
+    let status = std::process::Command::new(command)
+        .args(args)
+        .status()
+        .with_context(|| format!("failed to run {command}"))?;
+    if !status.success() {
+        bail!("{command} exited with {status}");
+    }
+    Ok(())
+}
+
+/// Waits for one browser callback and returns the posted credentials.
+fn wait_for_browser_credentials(
+    listener: &TcpListener,
+    expected_state: &str,
+    timeout: Duration,
+) -> Result<ClientCredentialsFile> {
+    let started = Instant::now();
+    loop {
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                let result = read_browser_credentials_request(&mut stream, expected_state);
+                match &result {
+                    Ok(_) => write_login_callback_response(
+                        &mut stream,
+                        "200 OK",
+                        "diskd login complete. You can close this window.",
+                    )?,
+                    Err(error) => write_login_callback_response(
+                        &mut stream,
+                        "400 Bad Request",
+                        &format!("diskd login failed: {error:#}"),
+                    )?,
+                }
+                return result;
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if started.elapsed() >= timeout {
+                    bail!("timed out waiting for browser login callback");
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            Err(error) => return Err(error).context("failed to accept login callback"),
+        }
+    }
+}
+
+/// Reads and validates the form POST sent by the OAuth Apps page.
+fn read_browser_credentials_request(
+    stream: &mut TcpStream,
+    expected_state: &str,
+) -> Result<ClientCredentialsFile> {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .context("failed to set login callback read timeout")?;
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut request_line = String::new();
+    reader.read_line(&mut request_line)?;
+    if !request_line.starts_with("POST ") {
+        bail!("expected POST callback");
+    }
+
+    let mut content_length = 0_usize;
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line)?;
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed.is_empty() {
+            break;
+        }
+        if let Some(value) = trimmed.strip_prefix("Content-Length:") {
+            content_length = value.trim().parse::<usize>()?;
+        } else if let Some(value) = trimmed.strip_prefix("content-length:") {
+            content_length = value.trim().parse::<usize>()?;
+        }
+    }
+    if content_length == 0 {
+        bail!("callback body is empty");
+    }
+    let mut body = vec![0_u8; content_length];
+    reader.read_exact(&mut body)?;
+    parse_browser_credentials_form(&String::from_utf8(body)?, expected_state)
+}
+
+/// Parses the x-www-form-urlencoded credentials callback body.
+fn parse_browser_credentials_form(
+    body: &str,
+    expected_state: &str,
+) -> Result<ClientCredentialsFile> {
+    let mut state = None;
+    let mut credentials = None;
+    for pair in body.split('&') {
+        let Some((raw_key, raw_value)) = pair.split_once('=') else {
+            continue;
+        };
+        let key = percent_decode_form(raw_key)?;
+        let value = percent_decode_form(raw_value)?;
+        match key.as_str() {
+            "state" => state = Some(value),
+            "credentials" => credentials = Some(value),
+            _ => {}
+        }
+    }
+    if state.as_deref() != Some(expected_state) {
+        bail!("callback state mismatch");
+    }
+    let Some(document) = credentials else {
+        bail!("callback is missing credentials");
+    };
+    Ok(parse_client_credentials_file(&document)?)
+}
+
+/// Writes a minimal HTML response to the browser callback request.
+fn write_login_callback_response(
+    stream: &mut TcpStream,
+    status: &str,
+    message: &str,
+) -> Result<()> {
+    let escaped = message
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    let body = format!("<!doctype html><title>diskd login</title><p>{escaped}</p>");
+    write!(
+        stream,
+        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )?;
+    stream.flush()?;
+    Ok(())
+}
+
+/// Percent-encodes URL query values without adding a dependency.
+fn percent_encode(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char)
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
+
+/// Decodes form-urlencoded field values from the local browser callback.
+fn percent_decode_form(value: &str) -> Result<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < bytes.len() => {
+                let high = decode_hex(bytes[index + 1])?;
+                let low = decode_hex(bytes[index + 2])?;
+                decoded.push((high << 4) | low);
+                index += 3;
+            }
+            b'%' => bail!("incomplete percent escape"),
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+    Ok(String::from_utf8(decoded)?)
+}
+
+/// Converts one ASCII hex byte into its numeric value.
+fn decode_hex(byte: u8) -> Result<u8> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => bail!("invalid percent escape"),
+    }
 }
 
 /// Removes the stored bearer token without touching non-secret config.
@@ -1820,5 +2139,57 @@ mod tests {
             config["mcpServers"]["diskd"]["env"]["APIS_BASE_URL"],
             DEFAULT_BASE_URL
         );
+    }
+
+    #[test]
+    fn builds_browser_login_url_for_production_app() {
+        /* REQ-DISKD-CLI-025: Browser login must open the production OAuth Apps page with a local callback by default. */
+        let url = browser_login_url(
+            DEFAULT_LOGIN_APP_URL,
+            "http://127.0.0.1:49152/callback",
+            "state 1",
+        );
+
+        assert_eq!(
+            url,
+            "https://app.iosya.com/oauth-apps?source=diskd-cli&callback=http%3A%2F%2F127.0.0.1%3A49152%2Fcallback&state=state%201"
+        );
+    }
+
+    #[test]
+    fn resolves_dev_browser_login_app_url() {
+        /* REQ-DISKD-CLI-026: diskd login --dev must use the development app host. */
+        assert_eq!(
+            resolve_login_app_url(true, None).unwrap(),
+            DEV_LOGIN_APP_URL
+        );
+        assert_eq!(
+            resolve_login_app_url(false, Some("https://app.example/oauth-apps")).unwrap(),
+            "https://app.example/oauth-apps"
+        );
+        assert!(resolve_login_app_url(true, Some("https://app.example")).is_err());
+    }
+
+    #[test]
+    fn parses_browser_login_credentials_form() {
+        /* REQ-DISKD-CLI-027: Browser login must accept credentials.json posted from the OAuth Apps page. */
+        let credentials = r#"{"issuer":"https://issuer.example","clientId":"client-1","clientSecret":"secret-1","audience":"diskd-api","apisUrl":"https://apis.example"}"#;
+        let body = format!("state=state-1&credentials={}", percent_encode(credentials));
+
+        let parsed = parse_browser_credentials_form(&body, "state-1").unwrap();
+
+        assert_eq!(parsed.issuer, "https://issuer.example");
+        assert_eq!(parsed.client_id, "client-1");
+        assert_eq!(parsed.client_secret, "secret-1");
+        assert_eq!(parsed.audience, "diskd-api");
+        assert_eq!(parsed.apis_url, "https://apis.example");
+    }
+
+    #[test]
+    fn rejects_browser_login_state_mismatch() {
+        /* REQ-DISKD-CLI-028: Browser login callbacks must match the local state value. */
+        let result = parse_browser_credentials_form("state=wrong&credentials=%7B%7D", "expected");
+
+        assert!(result.is_err());
     }
 }

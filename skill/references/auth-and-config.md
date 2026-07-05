@@ -47,7 +47,7 @@ APIS_ACCESS_TOKEN -> $DISKD_HOME/credentials
 | `APIS_ACCESS_TOKEN` | Bearer token used instead of stored credentials. |
 | `DISKD_HOME` | Directory for config and credentials. |
 | `DISKD_INSTALL_DIR` | Installer destination directory. |
-| `DISKD_VERSION` | Installer release tag, e.g. `v0.1.2`. |
+| `DISKD_VERSION` | Installer release tag, e.g. `v0.1.4`. |
 | `DISKD_NO_UPDATE_CHECK` | Disable startup update checks when set. |
 
 ## Config file
@@ -74,6 +74,16 @@ Never put tokens in `config.yaml`.
   "token_type": "Bearer"
 }
 ```
+
+## Browser login
+
+```sh
+diskd login
+diskd login --dev
+```
+
+Default browser login opens `https://app.iosya.com/oauth-apps`; `--dev` opens
+`https://app.upgraide.dev/oauth-apps`.
 
 ## Login with a token
 

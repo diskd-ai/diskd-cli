@@ -73,7 +73,7 @@ If a directory-level vector search fails because the backend reports a directory
 without a file id, retry with a specific file path or use `grep` for directory
 search.
 
-## Query a CSV or Spreadsheet
+## Ask Questions of a CSV or Spreadsheet
 
 Upload a CSV:
 
@@ -82,16 +82,11 @@ printf 'name,amount\nalpha,10\nbeta,20\n' > table.csv
 diskd upload ./table.csv --dest data --force
 ```
 
-Find the indexed SQLite table names:
+Ask natural-language questions:
 
 ```sh
-diskd --json biquery "SELECT name FROM sqlite_master WHERE type='table'" data/table.csv
-```
-
-Run a query:
-
-```sh
-diskd --json biquery 'SELECT SUM(amount) AS total FROM "table"' data/table.csv
+diskd --json biquery "what is the total amount?" data/table.csv
+diskd --json biquery "which name has the highest amount?" data/table.csv
 ```
 
 ## Use JSON Output in Scripts
