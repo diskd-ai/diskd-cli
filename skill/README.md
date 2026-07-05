@@ -15,7 +15,7 @@ This skill provides commands, flags, and end-to-end patterns for `diskd`:
 * Browse Drive paths (`ls`, `glob`, `stat`) and stream bytes (`cat`)
 * Read structured indexed document parts (`read`)
 * Exact/BM25 search (`grep`) and semantic search (`vsearch`)
-* BI queries over indexed CSV/TSV/XLS/XLSX (`biquery`)
+* Natural-language (plain-English) queries over indexed CSV/TSV/XLS/XLSX/mailbox spreadsheets (`biquery`); the Drive backend generates and runs the SQL for you
 * Upload, folder create, rename, copy, remove, and one-way sync
 * Auth (`login`/`logout`/`whoami`), project context (`set-context`/`get-context`)
 * Self-update (`update`) and the embedded MCP stdio server (`mcp serve`)
@@ -30,14 +30,14 @@ This skill provides commands, flags, and end-to-end patterns for `diskd`:
 * Mentions of diskd, the diskd CLI, or the diskd drive
 * Commands like `diskd ls / cat / read / grep / vsearch / biquery / upload / sync`
 * Uploading files to, or searching/reading files on, the diskd Drive from a shell
-* Running BI queries over CSV or spreadsheet files stored in Drive
+* Asking natural-language questions of CSV or spreadsheet files stored in Drive
 * Adding diskd as an MCP server to an LLM agent
 
 **Use cases:**
 
 * Automating Drive file operations in scripts or CI with `--json`
 * Semantic (`vsearch`) and exact (`grep`) search over indexed content
-* Querying tabular data with `biquery`
+* Querying tabular data in plain English with `biquery` (no SQL to write)
 * Wiring diskd tools into an agent via `diskd mcp serve`
 
 ---
@@ -70,7 +70,7 @@ diskd ls docs
 diskd cat docs/report.pdf > report.pdf
 diskd --json grep "payment terms" docs
 diskd --json vsearch "renewal clauses" docs/report.pdf --top 5
-diskd --json biquery 'SELECT SUM(amount) AS total FROM "table"' docs/table.csv
+diskd --json biquery "what is the total amount?" docs/table.csv
 ```
 
 Global flags (e.g. `--json`, `-p`, `--base-url`) must come **before** the
@@ -88,7 +88,7 @@ skill/
     commands.md                 # Complete flag-by-flag reference + Drive method per command
     auth-and-config.md          # login, credentials, config.yaml, env vars, path context
     mcp.md                      # MCP stdio server: tools, client config, JSON-RPC smoke tests
-    workflows.md                # End-to-end recipes: search, BI query, CI, sync, agent, troubleshoot
+    workflows.md                # End-to-end recipes: search, biquery, CI, sync, agent, troubleshoot
 ```
 
 ---

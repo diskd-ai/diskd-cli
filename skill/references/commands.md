@@ -97,15 +97,20 @@ Drive method: `paths/tools/inode-ls` (the deployed path-based metadata surface).
 ### `biquery`
 
 ```sh
-diskd --json biquery 'SELECT * FROM "table" LIMIT 5' docs/table.csv
+diskd --json biquery "total amount grouped by name" docs/table.csv
+diskd --json biquery "how many rows have amount over 100?" docs/table.csv
 ```
 
-Drive method: `paths/tools/bi-query`. Runs BI queries over indexed CSV/TSV/XLS/XLSX
-files. Table names are produced by Drive indexing -- discover them with:
+Drive method: `paths/tools/bi-query`. The `query` is a **natural-language
+question, not SQL**. The Drive backend maps the spreadsheet to a SQLite
+database, reads its schema, and uses an LLM (`query_nl_to_sql`) to generate and
+execute the SQL, returning a result table. You never write SQL and do not need
+to know the table or column names.
 
-```sh
-diskd --json biquery "SELECT name FROM sqlite_master WHERE type='table'" docs/table.csv
-```
+Point `paths` at indexed spreadsheet files (`.csv`, `.tsv`, `.xls`, `.xlsx`,
+`.mailbox`). Directory paths are expanded to the spreadsheet files inside them;
+non-spreadsheet files are ignored, and an all-non-spreadsheet path set returns a
+`NO_EXCEL_FILES` error.
 
 ## Write and manage
 
