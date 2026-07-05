@@ -97,13 +97,15 @@ Drive method: `paths/tools/inode-ls` (the deployed path-based metadata surface).
 ### `biquery`
 
 ```sh
-diskd --json biquery 'SELECT * FROM "table"' docs/table.csv
 diskd --json biquery "total amount grouped by name" docs/table.csv
+diskd --json biquery "how many rows have amount over 100?" docs/table.csv
 ```
 
-Drive method: `paths/tools/bi-query`. The CLI sends the `query` string and the
-spreadsheet paths to Drive. The query can be a plain-language question or
-SELECT-style query text; Drive returns a result table.
+Drive method: `paths/tools/bi-query`. The `query` is a **natural-language
+question, not SQL**. The Drive backend maps the spreadsheet to a SQLite
+database, reads its schema, and uses an LLM (`query_nl_to_sql`) to generate and
+execute the SQL, returning a result table. You never write SQL and do not need
+to know the table or column names.
 
 Point `paths` at indexed spreadsheet files (`.csv`, `.tsv`, `.xls`, `.xlsx`,
 `.mailbox`). Directory paths are expanded to the spreadsheet files inside them;
@@ -174,14 +176,18 @@ default `2`). No conflict detection and no bidirectional sync.
 ### `login`
 
 ```sh
+diskd login                                          # browser login via app.iosya.com
+diskd login --dev                                    # browser login via app.upgraide.dev
 diskd login --token "$APIS_ACCESS_TOKEN"                 # store a bearer token
 diskd login --credentials-file ./credentials.json        # OAuth client credentials
 ```
 
-With `--credentials-file`, the CLI reads OIDC discovery from `issuer`, calls the
-token endpoint with `grant_type=client_credentials`, and stores the returned
-access token. It first requests the gateway scopes used by Drive/project
-commands; if the issuer rejects those, it retries with the client's default
+Without flags, the CLI opens the OAuth Apps page and waits for browser-created
+diskd CLI credentials on a local callback. With `--credentials-file`, the CLI
+reads OIDC discovery from `issuer`, calls the token endpoint with
+`grant_type=client_credentials`, and stores the returned access token. It first
+requests the gateway scopes used by Drive/project commands; if the issuer rejects
+those, it retries with the client's default
 scopes. Credential-file input schema and details:
 [references/auth-and-config.md](auth-and-config.md).
 

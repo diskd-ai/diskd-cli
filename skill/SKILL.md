@@ -1,6 +1,6 @@
 ---
 name: diskd-cli
-description: diskd CLI (`diskd`) usage for the diskd Drive API through the public apis-service gateway. Use when listing, reading, searching, uploading, syncing, copying, moving, or deleting Drive files from the command line; running exact/BM25 search (`grep`), semantic search (`vsearch`), or BI queries over indexed CSV/TSV/XLS/XLSX spreadsheets (`biquery`); managing auth (`login`/`logout`/`whoami`), project context (`set-context`/`get-context`), self-update (`update`), JSON output for scripts (`--json`), or the embedded MCP stdio server (`diskd mcp serve`). Triggers on mentions of diskd, diskd CLI, `diskd ls/cat/read/grep/vsearch/biquery/upload/sync`, the diskd drive, or adding diskd as an MCP server to an agent.
+description: diskd CLI (`diskd`) usage for the diskd Drive API through the public apis-service gateway. Use when listing, reading, searching, uploading, syncing, copying, moving, or deleting Drive files from the command line; running exact/BM25 search (`grep`), semantic search (`vsearch`), or natural-language (plain-English) questions over indexed CSV/TSV/XLS/XLSX spreadsheets where the Drive backend generates the SQL (`biquery`); managing auth (`login`/`logout`/`whoami`), project context (`set-context`/`get-context`), self-update (`update`), JSON output for scripts (`--json`), or the embedded MCP stdio server (`diskd mcp serve`). Triggers on mentions of diskd, diskd CLI, `diskd ls/cat/read/grep/vsearch/biquery/upload/sync`, the diskd drive, or adding diskd as an MCP server to an agent.
 ---
 
 # diskd CLI
@@ -36,7 +36,7 @@ works; `diskd ls docs --json` does not.
 curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh | sh
 
 # Pin a version
-curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh | DISKD_VERSION=v0.1.3 sh
+curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh | DISKD_VERSION=v0.1.4 sh
 
 # Custom directory
 curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh | DISKD_INSTALL_DIR="$HOME/bin" sh
@@ -50,9 +50,9 @@ update notice when a newer release exists; the check is skipped for `--json`,
 ## Quick Start: auth -> context -> files
 
 ```sh
-# 1. Authenticate (stores only the bearer token under $DISKD_HOME/credentials)
-export APIS_BASE_URL="https://apis.iosya.com"
-diskd login --token "$APIS_ACCESS_TOKEN"          # or: diskd login --credentials-file ./credentials.json
+# 1. Authenticate (browser login stores only the bearer token under $DISKD_HOME/credentials)
+diskd login                                       # use --dev for https://app.upgraide.dev/oauth-apps
+diskd login --token "$APIS_ACCESS_TOKEN"          # non-interactive token login
 
 # 2. Verify identity (decodes workspace/subject from the token; never prints it)
 diskd --json whoami
@@ -83,7 +83,7 @@ diskd --json vsearch "contract renewal clauses" docs/report.pdf --top 5
 | `cat <path>` | Stream raw file bytes to stdout. Flag: `--version <n>`. |
 | `read <path>` | Structured indexed document parts. Flags: `--parts-limit`, `--parts-offset`. |
 | `stat <path>` | Path metadata. |
-| `biquery <query> [paths...]` | BI query over indexed CSV/TSV/XLS/XLSX/mailbox spreadsheets. |
+| `biquery <question> [paths...]` | Natural-language query over indexed CSV/TSV/XLS/XLSX/mailbox spreadsheets; the backend converts the question to SQL and runs it. |
 | `upload <local...>` | Upload file(s)/folder(s). Flags: `--dest <dir>`, `--recursive`, `--force`. |
 | `mkdir <path>` | Create a folder. |
 | `rm <path>` | Delete. Flag: `--recursive`. |
@@ -130,10 +130,11 @@ Drive API field. See [references/auth-and-config.md](references/auth-and-config.
   rejected** -- the current Drive grep contract has no matching fields. Do not
   rely on them.
 - **`cat` writes bytes to stdout**, so redirection and pipes work as expected.
-- **`biquery` passes a BI query string to Drive.** The query can be a
-  plain-language question or SELECT-style query text, e.g.
-  `diskd --json biquery 'SELECT * FROM "table"' data/table.csv`. Point it at
-  indexed spreadsheet files (`.csv`, `.tsv`, `.xls`, `.xlsx`, `.mailbox`); a
+- **`biquery` takes a plain-language question, not SQL.** The Drive backend
+  reads the spreadsheet schema and uses an LLM to generate and run the SQL,
+  returning a result table, e.g.
+  `diskd --json biquery "total amount grouped by name" data/table.csv`. Point it
+  at indexed spreadsheet files (`.csv`, `.tsv`, `.xls`, `.xlsx`, `.mailbox`); a
   directory path is expanded to the spreadsheet files inside.
 - **`upload` preserves paths relative to each provided local directory** and
   computes SHA-256 per file (start -> PUT bytes -> commit).
