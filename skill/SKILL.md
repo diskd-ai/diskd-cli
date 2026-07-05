@@ -76,7 +76,7 @@ diskd --json vsearch "contract renewal clauses" docs/report.pdf --top 5
 
 | Command | Purpose |
 | --- | --- |
-| `ls [path]` | List a Drive path. Flags: `--recursive`, `--long`, `--show-hidden`, `--show-system`. |
+| `ls [path]` | List a Drive path as `<DIR>/<FILE>`, size, and display name. Flags: `--recursive`, `--long`, `--show-hidden`, `--show-system`. |
 | `glob <pattern>` | Glob match. Flags: `--path <dir>`, `--show-hidden`, `--show-system`. |
 | `grep <query> [paths...]` | Exact/BM25 content search. Flags: `--limit`, `--offset`. Paths default to the context root. |
 | `vsearch <query> [paths...]` | Semantic search. Flags: `--limit` (alias `--top`), `--offset`. |

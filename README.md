@@ -119,7 +119,7 @@ diskd --json ls docs
 ## Common Commands
 
 ```sh
-diskd ls [path] [--recursive] [--long]
+diskd ls [path] [--recursive] [--long]    # <DIR>/<FILE>, size, display name
 diskd glob "**/*.pdf" [--path docs]
 diskd grep "exact text" [path...] --limit 10 --offset 0
 diskd vsearch "semantic query" [path...] --limit 10 --offset 0

@@ -31,7 +31,7 @@ the subcommand, and put command flags after the subcommand.
 
 | Command | Positional args | Command flags | API/behavior | Output notes |
 | --- | --- | --- | --- | --- |
-| `ls` | `[path]` default context root | `--recursive`, `--long`, `--show-hidden`, `--show-system` | `paths/tools/ls` with `path`, optional booleans | Text prints `displayName`/`display_name` first, then `name`, then full path. `--json` preserves raw entries. |
+| `ls` | `[path]` default context root | `--recursive`, `--long`, `--show-hidden`, `--show-system` | `paths/tools/ls` with `path`, optional booleans | Text is ls-like: type marker (`<DIR>`, `<FILE>`), size, then display name from top-level or metadata fields. `--json` preserves raw entries. |
 | `glob` | `<pattern>` | `--path <dir>`, `--show-hidden`, `--show-system` | `paths/tools/glob` with `pattern`, optional `path` | Returns matching path entries. |
 | `grep` | `<query> [paths...]` | `--limit <n>`, `--offset <n>`, unsupported parser-only `--ignore-case`, `--files-with-matches` | `paths/tools/grep` with `query`, normalized `paths`, optional `limit`, `offset` | Exact/BM25 indexed document search. Omitted paths search the context root. |
 | `vsearch` | `<query> [paths...]` | `--limit <n>`, `--top <n>` alias, `--offset <n>` | `paths/tools/vsearch` with `query`, normalized `paths`, optional `limit`, `offset` | Semantic search. Prefer file paths when directory vector search is unreliable. |
@@ -79,6 +79,17 @@ diskd ls [path] [--recursive] [--long] [--show-hidden] [--show-system]
 ```
 
 Drive method: `paths/tools/ls`. Path defaults to the context root.
+
+Human text output is one row per entry:
+
+```text
+<DIR>          0 Reports
+<FILE>         5 A Document
+```
+
+The name column prefers `displayName`/`display_name`, then
+`metadata.displayName`/`metadata.display_name`, then the raw Drive name/path.
+Use `diskd --json ls` to keep the backend response unchanged for scripts.
 
 ### `glob`
 

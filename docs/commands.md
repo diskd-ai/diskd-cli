@@ -23,7 +23,7 @@ Global flags must be placed before the subcommand.
 
 | Command | Positional args | Command flags | API/behavior | Output notes |
 | --- | --- | --- | --- | --- |
-| `ls` | `[path]` default context root | `--recursive`, `--long`, `--show-hidden`, `--show-system` | `paths/tools/ls` | Text prints `displayName`/`display_name` first; `--json` preserves raw entries. |
+| `ls` | `[path]` default context root | `--recursive`, `--long`, `--show-hidden`, `--show-system` | `paths/tools/ls` | Text is ls-like: type marker (`<DIR>`, `<FILE>`), size, then display name from top-level or metadata fields; `--json` preserves raw entries. |
 | `glob` | `<pattern>` | `--path <dir>`, `--show-hidden`, `--show-system` | `paths/tools/glob` | Matching path entries. |
 | `grep` | `<query> [paths...]` | `--limit <n>`, `--offset <n>` | `paths/tools/grep` | Exact/BM25 search; omitted paths use context root. |
 | `vsearch` | `<query> [paths...]` | `--limit <n>`, `--top <n>` alias, `--offset <n>` | `paths/tools/vsearch` | Semantic search; prefer file paths when possible. |
@@ -186,6 +186,17 @@ diskd ls [path] [--recursive] [--long] [--show-hidden] [--show-system]
 ```
 
 Calls `paths/tools/ls`.
+
+Human text output is one row per entry:
+
+```text
+<DIR>          0 Reports
+<FILE>         5 A Document
+```
+
+The name column prefers `displayName`/`display_name`, then
+`metadata.displayName`/`metadata.display_name`, then the raw Drive name/path.
+Use `diskd --json ls` to keep the backend response unchanged for scripts.
 
 ### `glob`
 

@@ -2288,7 +2288,7 @@ fn render_value(value: &Value, json_mode: bool) -> Result<()> {
 }
 
 /// Renders ls results with a stable text mode for humans and JSON for scripts.
-fn render_ls(value: &Value, json_mode: bool, long: bool) -> Result<()> {
+fn render_ls(value: &Value, json_mode: bool, _long: bool) -> Result<()> {
     if json_mode {
         return render_value(value, true);
     }
@@ -2300,27 +2300,60 @@ fn render_ls(value: &Value, json_mode: bool, long: bool) -> Result<()> {
         .unwrap_or_default();
     for entry in entries {
         let name = ls_entry_display_name(&entry);
-        if long {
-            let kind = entry.get("type").and_then(Value::as_str).unwrap_or("?");
-            let size = entry.get("size").and_then(Value::as_u64).unwrap_or(0);
-            println!("{kind}\t{size}\t{name}");
-        } else {
-            println!("{name}");
-        }
+        let kind = ls_entry_type_label(&entry);
+        let size = ls_entry_size(&entry);
+        println!("{kind:<7} {size:>8} {name}");
     }
     Ok(())
 }
 
 /// Selects the user-facing ls label while preserving raw paths for JSON mode.
 fn ls_entry_display_name(entry: &Value) -> &str {
+    let metadata = entry.get("metadata").and_then(Value::as_object);
     entry
         .get("displayName")
         .or_else(|| entry.get("display_name"))
+        .or_else(|| metadata.and_then(|value| value.get("displayName")))
+        .or_else(|| metadata.and_then(|value| value.get("display_name")))
         .or_else(|| entry.get("name"))
         .or_else(|| entry.get("full_path"))
         .or_else(|| entry.get("fullPath"))
         .and_then(Value::as_str)
         .unwrap_or("")
+}
+
+/// Normalizes Drive path types into an ls-like fixed-width marker.
+fn ls_entry_type_label(entry: &Value) -> String {
+    let raw_type = entry
+        .get("type")
+        .or_else(|| entry.get("path_type"))
+        .or_else(|| entry.get("pathType"))
+        .and_then(Value::as_str)
+        .unwrap_or("file")
+        .trim()
+        .to_ascii_lowercase();
+
+    match raw_type.as_str() {
+        "dir" | "directory" | "folder" => "<DIR>".to_owned(),
+        "file" => "<FILE>".to_owned(),
+        "symlink" | "link" => "<LINK>".to_owned(),
+        "" => "<FILE>".to_owned(),
+        other => format!("<{}>", other.to_ascii_uppercase()),
+    }
+}
+
+/// Reads the size fields Drive list entries may expose for human text output.
+fn ls_entry_size(entry: &Value) -> u64 {
+    entry
+        .get("size")
+        .or_else(|| entry.get("size_bytes"))
+        .or_else(|| entry.get("sizeBytes"))
+        .and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_i64().and_then(|number| u64::try_from(number).ok()))
+        })
+        .unwrap_or(0)
 }
 
 /// Reads a required string from a JSON object.
