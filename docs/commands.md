@@ -78,7 +78,7 @@ Most human-facing commands perform a short startup update check. If a newer
 release exists, `diskd` prints a yellow stderr notice:
 
 ```text
-diskd 0.1.2 is available; current is 0.1.1. Run `diskd update`.
+diskd 0.1.3 is available; current is 0.1.2. Run `diskd update`.
 ```
 
 Startup checks are skipped for `--json`, `--quiet`, and `diskd mcp serve`.

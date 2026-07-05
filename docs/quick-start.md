@@ -14,7 +14,7 @@ curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh 
 Pinned release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh | DISKD_VERSION=v0.1.2 sh
+curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh | DISKD_VERSION=v0.1.3 sh
 ```
 
 Confirm the binary:

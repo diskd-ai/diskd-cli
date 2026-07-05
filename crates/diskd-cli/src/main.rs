@@ -1447,7 +1447,7 @@ fn mcp_tools() -> Vec<Value> {
         }),
         json!({
             "name": "tools__bi_query",
-            "description": "Run SQL queries on spreadsheet/Excel files mapped to SQLite.",
+            "description": "Run BI queries on indexed spreadsheet and CSV files.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

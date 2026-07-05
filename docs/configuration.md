@@ -33,7 +33,7 @@ APIS_ACCESS_TOKEN -> $DISKD_HOME/credentials
 | `APIS_ACCESS_TOKEN` | Bearer token used instead of stored credentials. |
 | `DISKD_HOME` | Directory for config and credentials. |
 | `DISKD_INSTALL_DIR` | Installer destination directory. |
-| `DISKD_VERSION` | Installer release tag, for example `v0.1.2`. |
+| `DISKD_VERSION` | Installer release tag, for example `v0.1.3`. |
 | `DISKD_NO_UPDATE_CHECK` | Disable startup update checks when set. |
 
 ## Config File
