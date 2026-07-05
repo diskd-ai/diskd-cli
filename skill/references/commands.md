@@ -24,6 +24,36 @@ Placed before the subcommand.
 | `-p`, `--project <id>` | Override the current project for one command. |
 | `-w`, `--workspace <id>` | Reserved compatibility flag; workspace scope always comes from the token. |
 
+## Agent command matrix
+
+Use this table when calling `diskd` from an agent skill. Put global flags before
+the subcommand, and put command flags after the subcommand.
+
+| Command | Positional args | Command flags | API/behavior | Output notes |
+| --- | --- | --- | --- | --- |
+| `ls` | `[path]` default context root | `--recursive`, `--long`, `--show-hidden`, `--show-system` | `paths/tools/ls` with `path`, optional booleans | Text prints `displayName`/`display_name` first, then `name`, then full path. `--json` preserves raw entries. |
+| `glob` | `<pattern>` | `--path <dir>`, `--show-hidden`, `--show-system` | `paths/tools/glob` with `pattern`, optional `path` | Returns matching path entries. |
+| `grep` | `<query> [paths...]` | `--limit <n>`, `--offset <n>`, unsupported parser-only `--ignore-case`, `--files-with-matches` | `paths/tools/grep` with `query`, normalized `paths`, optional `limit`, `offset` | Exact/BM25 indexed document search. Omitted paths search the context root. |
+| `vsearch` | `<query> [paths...]` | `--limit <n>`, `--top <n>` alias, `--offset <n>` | `paths/tools/vsearch` with `query`, normalized `paths`, optional `limit`, `offset` | Semantic search. Prefer file paths when directory vector search is unreliable. |
+| `cat` | `<path>` | `--version <n>` | `drive/files/download-url`, then authenticated byte download | Writes raw bytes to stdout; redirect for binary files. |
+| `read` | `<path>` | `--limit <n>`/`--parts-limit <n>`, `--offset <n>`/`--parts-offset <n>` | `paths/tools/read` with `path`, optional `parts_limit`, `parts_offset` | Returns structured parts plus `total_parts`, `next_offset`, `eof`. |
+| `stat` | `<path>` | none | `paths/tools/inode-ls` | Returns path metadata. |
+| `biquery` | `<question> [paths...]` | none | `paths/tools/bi-query` with natural-language `query`, normalized `paths` | Question is not SQL. Use for indexed `.csv`, `.tsv`, `.xls`, `.xlsx`, `.mailbox`. |
+| `upload` | `<local...>` one or more files/folders | `--dest <dir>`, `--recursive`, `--force` | `drive/upload/start`, PUT upload URL, `drive/upload/commit` per file | Uploads local files into Drive; `--force` overwrites. |
+| `mkdir` | `<path>` | none | `drive/paths/create` | Creates a Drive folder. |
+| `rm` | `<path>` | `--recursive` | `drive/paths/delete` | Deletes a file or folder. |
+| `mv` | `<src> <dst>` | none | `drive/paths/rename` | Renames/moves to destination parent/name. |
+| `cp` | `<src> <dst>` | `--force` | Download source bytes, upload destination bytes | Client-side copy. |
+| `sync` | `<folder>` | `--dest <dir>`, `--once`, `--interval-seconds <n>` | Repeated local tree upload passes | One-way local-to-Drive sync; no conflict detection. |
+| `login` | none | `--dev`, `--app-url <url>`, `--token <token>`, `--credentials-file <path>` | Browser loopback login or OAuth client-credentials exchange | Stores only bearer token under `$DISKD_HOME/credentials`. |
+| `logout` | none | none | Local file delete | Deletes stored credentials. |
+| `whoami` | none | none | Local JWT payload decode | Prints workspace/subject metadata; never prints token. |
+| `set-context` | `[project]` name or id | `--list`, `--root`/`--clear` | Project list REST call or local config write | Project context is local path prefixing, not a Drive API field. |
+| `get-context` | none | none | Local config read | Prints current project context or workspace root. |
+| `version` | none | none | Local binary metadata | Prints CLI version; JSON mode includes name/version. |
+| `update` | none | `--force` | GitHub release lookup, checksum verification, binary replacement | Skipped by agents unless explicitly asked. |
+| `mcp serve` | none | none | Embedded MCP stdio server | Direct terminal run prints copyable MCP config; MCP clients launch over stdio. |
+
 ## Read and query
 
 ### `ls`

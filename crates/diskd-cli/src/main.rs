@@ -1970,12 +1970,7 @@ fn render_ls(value: &Value, json_mode: bool, long: bool) -> Result<()> {
         .cloned()
         .unwrap_or_default();
     for entry in entries {
-        let name = entry
-            .get("full_path")
-            .or_else(|| entry.get("fullPath"))
-            .or_else(|| entry.get("name"))
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        let name = ls_entry_display_name(&entry);
         if long {
             let kind = entry.get("type").and_then(Value::as_str).unwrap_or("?");
             let size = entry.get("size").and_then(Value::as_u64).unwrap_or(0);
@@ -1985,6 +1980,18 @@ fn render_ls(value: &Value, json_mode: bool, long: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Selects the user-facing ls label while preserving raw paths for JSON mode.
+fn ls_entry_display_name(entry: &Value) -> &str {
+    entry
+        .get("displayName")
+        .or_else(|| entry.get("display_name"))
+        .or_else(|| entry.get("name"))
+        .or_else(|| entry.get("full_path"))
+        .or_else(|| entry.get("fullPath"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
 }
 
 /// Reads a required string from a JSON object.

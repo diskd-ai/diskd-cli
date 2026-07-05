@@ -19,6 +19,33 @@ Global flags must be placed before the subcommand.
 | `-p`, `--project <id>` | Override the current project for one command. |
 | `-w`, `--workspace <id>` | Reserved compatibility flag; workspace scope comes from the token. |
 
+## Command Parameters
+
+| Command | Positional args | Command flags | API/behavior | Output notes |
+| --- | --- | --- | --- | --- |
+| `ls` | `[path]` default context root | `--recursive`, `--long`, `--show-hidden`, `--show-system` | `paths/tools/ls` | Text prints `displayName`/`display_name` first; `--json` preserves raw entries. |
+| `glob` | `<pattern>` | `--path <dir>`, `--show-hidden`, `--show-system` | `paths/tools/glob` | Matching path entries. |
+| `grep` | `<query> [paths...]` | `--limit <n>`, `--offset <n>` | `paths/tools/grep` | Exact/BM25 search; omitted paths use context root. |
+| `vsearch` | `<query> [paths...]` | `--limit <n>`, `--top <n>` alias, `--offset <n>` | `paths/tools/vsearch` | Semantic search; prefer file paths when possible. |
+| `cat` | `<path>` | `--version <n>` | `drive/files/download-url` plus byte download | Raw bytes to stdout. |
+| `read` | `<path>` | `--limit`/`--parts-limit`, `--offset`/`--parts-offset` | `paths/tools/read` | Structured parts plus pagination metadata. |
+| `stat` | `<path>` | none | `paths/tools/inode-ls` | Path metadata. |
+| `biquery` | `<question> [paths...]` | none | `paths/tools/bi-query` | Natural-language spreadsheet question, not SQL. |
+| `upload` | `<local...>` | `--dest <dir>`, `--recursive`, `--force` | upload start, PUT, commit | Uploads files/folders. |
+| `mkdir` | `<path>` | none | `drive/paths/create` | Creates folder. |
+| `rm` | `<path>` | `--recursive` | `drive/paths/delete` | Deletes file/folder. |
+| `mv` | `<src> <dst>` | none | `drive/paths/rename` | Move/rename. |
+| `cp` | `<src> <dst>` | `--force` | client download then upload | Copy through local client. |
+| `sync` | `<folder>` | `--dest <dir>`, `--once`, `--interval-seconds <n>` | repeated upload passes | One-way local-to-Drive. |
+| `login` | none | `--dev`, `--app-url`, `--token`, `--credentials-file` | browser login or token exchange | Stores bearer token. |
+| `logout` | none | none | local credential delete | Clears auth. |
+| `whoami` | none | none | local JWT decode | Prints workspace/subject metadata. |
+| `set-context` | `[project]` | `--list`, `--root`/`--clear` | project REST list or local config write | Selects local project path prefix. |
+| `get-context` | none | none | local config read | Prints active context. |
+| `version` | none | none | local metadata | Prints CLI version. |
+| `update` | none | `--force` | GitHub release update | Replaces binary after checksum verification. |
+| `mcp serve` | none | none | embedded MCP stdio | Prints agent config when run directly. |
+
 ## Auth and Meta
 
 ### `login`

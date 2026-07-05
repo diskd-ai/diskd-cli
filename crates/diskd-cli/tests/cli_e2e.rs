@@ -108,7 +108,7 @@ fn write_fixture_file(home: &TempDir, name: &str, contents: &[u8]) -> PathBuf {
     path
 }
 
-/* REQ-DISKD-CLI-015: ls must call the gateway Drive JSON-RPC endpoint with bearer auth and project-normalized paths. */
+/* REQ-DISKD-CLI-015: ls must call the gateway Drive JSON-RPC endpoint with bearer auth, project-normalized paths, and displayName-first text output. */
 #[test]
 fn ls_normalizes_project_path_and_uses_bearer_auth() {
     let gateway = start_gateway(1, |_, mut request| {
@@ -128,7 +128,7 @@ fn ls_normalizes_project_path_and_uses_bearer_auth() {
                 "id": body["id"],
                 "result": {
                     "entries": [
-                        { "name": "a.txt", "type": "file", "full_path": "/Projects/01PROJECT/docs/a.txt", "size": 5 }
+                        { "name": "a.txt", "displayName": "A Document", "type": "file", "full_path": "/Projects/01PROJECT/docs/a.txt", "size": 5 }
                     ]
                 }
             }),
@@ -144,7 +144,7 @@ fn ls_normalizes_project_path_and_uses_bearer_auth() {
 
     gateway.join();
     assert!(output.status.success(), "{}", stderr_text(&output));
-    assert!(stdout_text(&output).contains("/Projects/01PROJECT/docs/a.txt"));
+    assert_eq!(stdout_text(&output).trim(), "A Document");
 }
 
 /* REQ-DISKD-CLI-016: set-context --list must call the platform projects REST route and print only id/name. */
