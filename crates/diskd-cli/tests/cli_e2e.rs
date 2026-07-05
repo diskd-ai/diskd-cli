@@ -1,0 +1,300 @@
+use std::path::PathBuf;
+use std::process::{Command, Output};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
+
+use serde_json::{json, Value};
+use tempfile::TempDir;
+use tiny_http::{Header, Request, Response, Server};
+
+/// Keeps a fake gateway alive until the expected request sequence completes.
+struct FakeGateway {
+    base_url: String,
+    handle: JoinHandle<()>,
+}
+
+impl FakeGateway {
+    /// Waits for the fake gateway thread so request assertions are surfaced.
+    fn join(self) {
+        self.handle.join().expect("fake gateway thread panicked");
+    }
+}
+
+/// Starts a tiny HTTP server that validates a fixed request sequence.
+fn start_gateway<F>(expected_requests: usize, mut handler: F) -> FakeGateway
+where
+    F: FnMut(usize, Request) + Send + 'static,
+{
+    let server = Server::http("127.0.0.1:0").expect("server should bind");
+    let address = server
+        .server_addr()
+        .to_string()
+        .replace("0.0.0.0", "127.0.0.1");
+    let handle = thread::spawn(move || {
+        for index in 0..expected_requests {
+            let request = server
+                .recv_timeout(Duration::from_secs(10))
+                .expect("server receive should not fail")
+                .expect("expected request did not arrive");
+            handler(index, request);
+        }
+    });
+    FakeGateway {
+        base_url: format!("http://{address}"),
+        handle,
+    }
+}
+
+/// Runs the diskd binary with isolated config and auth environment.
+fn run_diskd(home: &TempDir, base_url: &str, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_diskd"))
+        .env("DISKD_HOME", home.path())
+        .env("APIS_BASE_URL", base_url)
+        .env("APIS_ACCESS_TOKEN", "token-test")
+        .args(args)
+        .output()
+        .expect("diskd should execute")
+}
+
+/// Converts process stdout bytes to UTF-8 for assertions.
+fn stdout_text(output: &Output) -> String {
+    String::from_utf8(output.stdout.clone()).expect("stdout should be utf8")
+}
+
+/// Converts process stderr bytes to UTF-8 for diagnostics.
+fn stderr_text(output: &Output) -> String {
+    String::from_utf8(output.stderr.clone()).expect("stderr should be utf8")
+}
+
+/// Reads a tiny_http request body as JSON.
+fn request_json(request: &mut Request) -> Value {
+    let mut body = String::new();
+    request
+        .as_reader()
+        .read_to_string(&mut body)
+        .expect("request body should be readable");
+    serde_json::from_str(&body).expect("request body should be json")
+}
+
+/// Reads a required request header value.
+fn request_header(request: &Request, name: &str) -> String {
+    request
+        .headers()
+        .iter()
+        .find(|header| header.field.to_string().eq_ignore_ascii_case(name))
+        .map(|header| header.value.as_str().to_owned())
+        .unwrap_or_default()
+}
+
+/// Sends a JSON response with application/json content type.
+fn respond_json(request: Request, value: Value) {
+    let header = Header::from_bytes("Content-Type", "application/json").unwrap();
+    request
+        .respond(Response::from_string(value.to_string()).with_header(header))
+        .expect("response should send");
+}
+
+/// Sends a binary/text response body.
+fn respond_bytes(request: Request, body: &'static [u8]) {
+    request
+        .respond(Response::from_data(body))
+        .expect("response should send");
+}
+
+/// Creates a local file fixture and returns its path.
+fn write_fixture_file(home: &TempDir, name: &str, contents: &[u8]) -> PathBuf {
+    let path = home.path().join(name);
+    std::fs::write(&path, contents).expect("fixture should be written");
+    path
+}
+
+/* REQ-DISKD-CLI-015: ls must call the gateway Drive JSON-RPC endpoint with bearer auth and project-normalized paths. */
+#[test]
+fn ls_normalizes_project_path_and_uses_bearer_auth() {
+    let gateway = start_gateway(1, |_, mut request| {
+        assert_eq!(request.method().as_str(), "POST");
+        assert_eq!(request.url(), "/v1/os/drive/api/v1");
+        assert_eq!(
+            request_header(&request, "Authorization"),
+            "Bearer token-test"
+        );
+        let body = request_json(&mut request);
+        assert_eq!(body["method"], "paths/tools/ls");
+        assert_eq!(body["params"]["path"], "/Projects/01PROJECT/docs");
+        respond_json(
+            request,
+            json!({
+                "jsonrpc": "2.0",
+                "id": body["id"],
+                "result": {
+                    "entries": [
+                        { "name": "a.txt", "type": "file", "full_path": "/Projects/01PROJECT/docs/a.txt", "size": 5 }
+                    ]
+                }
+            }),
+        );
+    });
+    let home = TempDir::new().unwrap();
+
+    let output = run_diskd(
+        &home,
+        &gateway.base_url,
+        &["--project", "01PROJECT", "ls", "docs"],
+    );
+
+    gateway.join();
+    assert!(output.status.success(), "{}", stderr_text(&output));
+    assert!(stdout_text(&output).contains("/Projects/01PROJECT/docs/a.txt"));
+}
+
+/* REQ-DISKD-CLI-016: set-context --list must call the platform projects REST route and print only id/name. */
+#[test]
+fn set_context_list_reads_platform_projects() {
+    let gateway = start_gateway(1, |_, request| {
+        assert_eq!(request.method().as_str(), "GET");
+        assert_eq!(request.url(), "/v1/platform/projects/api/projects");
+        assert_eq!(
+            request_header(&request, "Authorization"),
+            "Bearer token-test"
+        );
+        respond_json(
+            request,
+            json!([
+                { "id": "01PROJECT", "name": "Alpha", "description": "ignored" },
+                { "id": "02PROJECT", "name": "Beta" }
+            ]),
+        );
+    });
+    let home = TempDir::new().unwrap();
+
+    let output = run_diskd(
+        &home,
+        &gateway.base_url,
+        &["--json", "set-context", "--list"],
+    );
+
+    gateway.join();
+    assert!(output.status.success(), "{}", stderr_text(&output));
+    let printed: Value = serde_json::from_str(&stdout_text(&output)).unwrap();
+    assert_eq!(printed[0], json!({ "id": "01PROJECT", "name": "Alpha" }));
+}
+
+/* REQ-DISKD-CLI-017: upload must execute Drive start, upload PUT, then commit with the returned intent and etag. */
+#[test]
+fn upload_runs_start_put_commit_sequence() {
+    let gateway = start_gateway(3, |index, mut request| match index {
+        0 => {
+            assert_eq!(request.method().as_str(), "POST");
+            assert_eq!(request.url(), "/v1/os/drive/api/v1");
+            let body = request_json(&mut request);
+            assert_eq!(body["method"], "drive/upload/start");
+            assert_eq!(body["params"]["name"], "note.txt");
+            assert_eq!(body["params"]["parent_path"], "/Projects/01PROJECT");
+            assert_eq!(body["params"]["size"], 5);
+            respond_json(
+                request,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {
+                        "intent_id": "intent-1",
+                        "inode": "inode-1",
+                        "upload_url": "/upload/intent-1",
+                        "expires_in": 60,
+                        "multipart": false
+                    }
+                }),
+            );
+        }
+        1 => {
+            assert_eq!(request.method().as_str(), "PUT");
+            assert_eq!(request.url(), "/v1/os/drive/upload/intent-1");
+            assert_eq!(request_header(&request, "X-Upload-Intent-Id"), "intent-1");
+            respond_json(request, json!({ "etag": "etag-1" }));
+        }
+        2 => {
+            assert_eq!(request.method().as_str(), "POST");
+            let body = request_json(&mut request);
+            assert_eq!(body["method"], "drive/upload/commit");
+            assert_eq!(body["params"]["intent_id"], "intent-1");
+            assert_eq!(body["params"]["etag"], "etag-1");
+            respond_json(
+                request,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {
+                        "inode": "inode-1",
+                        "etag": "etag-1",
+                        "version": 1,
+                        "committed_at": "2026-07-05T00:00:00Z"
+                    }
+                }),
+            );
+        }
+        _ => unreachable!(),
+    });
+    let home = TempDir::new().unwrap();
+    let file = write_fixture_file(&home, "note.txt", b"hello");
+
+    let output = run_diskd(
+        &home,
+        &gateway.base_url,
+        &[
+            "--project",
+            "01PROJECT",
+            "--json",
+            "upload",
+            file.to_str().unwrap(),
+            "--dest",
+            "/",
+            "--force",
+        ],
+    );
+
+    gateway.join();
+    assert!(output.status.success(), "{}", stderr_text(&output));
+    assert!(stdout_text(&output).contains("inode-1"));
+}
+
+/* REQ-DISKD-CLI-018: cat must resolve a download URL through Drive JSON-RPC and stream the bytes to stdout. */
+#[test]
+fn cat_streams_downloaded_bytes() {
+    let base_url_holder = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let base_url_for_handler = base_url_holder.clone();
+    let gateway = start_gateway(2, move |index, mut request| match index {
+        0 => {
+            let base_url = base_url_for_handler.lock().unwrap().clone();
+            assert_eq!(request.method().as_str(), "POST");
+            let body = request_json(&mut request);
+            assert_eq!(body["method"], "drive/files/download-url");
+            assert_eq!(body["params"]["path"], "/Projects/01PROJECT/a.txt");
+            respond_json(
+                request,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": { "url": format!("{base_url}/download/a.txt"), "expires_in": 60 }
+                }),
+            );
+        }
+        1 => {
+            assert_eq!(request.method().as_str(), "GET");
+            assert_eq!(request.url(), "/download/a.txt");
+            respond_bytes(request, b"hello from drive");
+        }
+        _ => unreachable!(),
+    });
+    *base_url_holder.lock().unwrap() = gateway.base_url.clone();
+    let home = TempDir::new().unwrap();
+
+    let output = run_diskd(
+        &home,
+        &gateway.base_url,
+        &["--project", "01PROJECT", "cat", "a.txt"],
+    );
+
+    gateway.join();
+    assert!(output.status.success(), "{}", stderr_text(&output));
+    assert_eq!(output.stdout, b"hello from drive");
+}
