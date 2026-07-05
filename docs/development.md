@@ -78,20 +78,20 @@ diskd-<version>-<target>.tar.gz.sha256
 Push a tag to release:
 
 ```sh
-git tag v0.1.4
-git push github v0.1.4
+git tag v0.1.5
+git push github v0.1.5
 ```
 
 Run manually:
 
 ```sh
-gh workflow run release --repo diskd-ai/diskd-cli --field version=v0.1.4 --ref main
+gh workflow run release --repo diskd-ai/diskd-cli --field version=v0.1.5 --ref main
 ```
 
 Verify:
 
 ```sh
-gh release view v0.1.4 --repo diskd-ai/diskd-cli
+gh release view v0.1.5 --repo diskd-ai/diskd-cli
 ```
 
 The self-update command depends on these exact release asset names and matching
@@ -102,6 +102,6 @@ release process.
 
 ```sh
 tmp="$(mktemp -d)"
-DISKD_INSTALL_DIR="$tmp" DISKD_VERSION=v0.1.4 sh install.sh
+DISKD_INSTALL_DIR="$tmp" DISKD_VERSION=v0.1.5 sh install.sh
 "$tmp/diskd" --json version
 ```
