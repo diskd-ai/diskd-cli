@@ -7,7 +7,7 @@ and a token is available (see [auth-and-config.md](auth-and-config.md)).
 
 - [Upload, list, and read a file](#upload-list-and-read-a-file)
 - [Search indexed content](#search-indexed-content)
-- [Query a CSV or spreadsheet in plain English (biquery)](#query-a-csv-or-spreadsheet-in-plain-english-biquery)
+- [Query a CSV or spreadsheet (biquery)](#query-a-csv-or-spreadsheet-biquery)
 - [Upload a folder once](#upload-a-folder-once)
 - [Continuously push a local folder](#continuously-push-a-local-folder)
 - [Use a different gateway](#use-a-different-gateway)
@@ -46,11 +46,10 @@ If a directory-level vector search fails because the backend reports a directory
 without a file id, retry with a specific file path or use `grep` for the
 directory.
 
-## Query a CSV or spreadsheet in plain English (biquery)
+## Query a CSV or spreadsheet (biquery)
 
-`biquery` takes a **natural-language question, not SQL**. The Drive backend maps
-the spreadsheet to SQLite, reads the schema, and uses an LLM to write and run the
-SQL for you. You never write SQL or reference table/column names directly.
+`biquery` sends a BI query string and one or more spreadsheet paths to Drive.
+The query can be a plain-language question or SELECT-style query text.
 
 Upload the data:
 
@@ -59,12 +58,12 @@ printf 'name,amount\nalpha,10\nbeta,20\n' > table.csv
 diskd upload ./table.csv --dest data --force
 ```
 
-Ask questions in natural language:
+Run the query:
 
 ```sh
+diskd --json biquery 'SELECT * FROM "table"' data/table.csv
 diskd --json biquery "what is the total amount?" data/table.csv
 diskd --json biquery "total amount grouped by name" data/table.csv
-diskd --json biquery "which name has the highest amount?" data/table.csv
 ```
 
 Supported inputs are indexed spreadsheet files (`.csv`, `.tsv`, `.xls`, `.xlsx`,

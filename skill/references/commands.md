@@ -97,15 +97,13 @@ Drive method: `paths/tools/inode-ls` (the deployed path-based metadata surface).
 ### `biquery`
 
 ```sh
+diskd --json biquery 'SELECT * FROM "table"' docs/table.csv
 diskd --json biquery "total amount grouped by name" docs/table.csv
-diskd --json biquery "how many rows have amount over 100?" docs/table.csv
 ```
 
-Drive method: `paths/tools/bi-query`. The `query` is a **natural-language
-question, not SQL**. The Drive backend maps the spreadsheet to a SQLite
-database, reads its schema, and uses an LLM (`query_nl_to_sql`) to generate and
-execute the SQL, returning a result table. You never write SQL and do not need
-to know the table or column names.
+Drive method: `paths/tools/bi-query`. The CLI sends the `query` string and the
+spreadsheet paths to Drive. The query can be a plain-language question or
+SELECT-style query text; Drive returns a result table.
 
 Point `paths` at indexed spreadsheet files (`.csv`, `.tsv`, `.xls`, `.xlsx`,
 `.mailbox`). Directory paths are expanded to the spreadsheet files inside them;
