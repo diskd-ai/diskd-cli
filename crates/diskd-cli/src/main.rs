@@ -31,7 +31,7 @@ use diskd_config::{
 };
 use flate2::read::GzDecoder;
 use reqwest::blocking::Client as HttpClient;
-use reqwest::header::{ACCEPT, USER_AGENT};
+use reqwest::header::USER_AGENT;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -40,7 +40,7 @@ use tar::Archive;
 const DEFAULT_BASE_URL: &str = "https://apis.iosya.com";
 const DEFAULT_LOGIN_APP_URL: &str = "https://app.iosya.com/oauth-apps";
 const DEV_LOGIN_APP_URL: &str = "https://app.upgraide.dev/oauth-apps";
-const GITHUB_API_BASE_URL: &str = "https://api.github.com";
+const GITHUB_BASE_URL: &str = "https://github.com";
 const GITHUB_REPOSITORY: &str = "diskd-ai/diskd-cli";
 const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_millis(900);
 const UPDATE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
@@ -1261,8 +1261,8 @@ fn print_version(cli: &Cli) -> Result<()> {
 /// Updates the running diskd binary from the latest GitHub release.
 fn update_cli(cli: &Cli, force: bool) -> Result<()> {
     let http = build_update_http_client(UPDATE_DOWNLOAD_TIMEOUT)?;
-    let release = fetch_latest_release(&http)?;
     let target = current_release_target()?;
+    let release = fetch_latest_release(&http, target)?;
     let current_version = env!("CARGO_PKG_VERSION");
     let Some(update) = available_update_from_release(&release, current_version, target, force)?
     else {
@@ -1341,8 +1341,8 @@ fn should_check_for_updates(cli: &Cli) -> bool {
 /// Looks up the latest release using a short timeout for command-start checks.
 fn check_for_available_update(timeout: Duration) -> Result<Option<AvailableUpdate>> {
     let http = build_update_http_client(timeout)?;
-    let release = fetch_latest_release(&http)?;
     let target = current_release_target()?;
+    let release = fetch_latest_release(&http, target)?;
     available_update_from_release(&release, env!("CARGO_PKG_VERSION"), target, false)
 }
 
@@ -1354,29 +1354,74 @@ fn build_update_http_client(timeout: Duration) -> Result<HttpClient> {
         .context("failed to build update HTTP client")
 }
 
-/// Fetches the latest public GitHub release metadata for diskd-cli.
-fn fetch_latest_release(http: &HttpClient) -> Result<GitHubRelease> {
+/// Fetches the latest public GitHub release without consuming REST API quota.
+fn fetch_latest_release(http: &HttpClient, target: &str) -> Result<GitHubRelease> {
     let response = http
         .get(latest_release_url())
         .header(USER_AGENT, update_user_agent())
-        .header(ACCEPT, "application/vnd.github+json")
         .send()
         .context("failed to request latest diskd release")?
         .error_for_status()
         .context("latest diskd release request failed")?;
-    response
-        .json::<GitHubRelease>()
-        .context("failed to decode latest diskd release")
+    let tag_name = latest_release_tag_from_url(response.url().as_str())?;
+    Ok(release_from_tag(&tag_name, target))
 }
 
-/// Builds the GitHub API URL for the latest diskd-cli release.
+/// Builds the GitHub web URL that redirects to the latest diskd-cli release tag.
 fn latest_release_url() -> String {
-    format!("{GITHUB_API_BASE_URL}/repos/{GITHUB_REPOSITORY}/releases/latest")
+    format!("{GITHUB_BASE_URL}/{GITHUB_REPOSITORY}/releases/latest")
 }
 
 /// Returns the update user agent required by GitHub API requests.
 fn update_user_agent() -> String {
     format!("diskd/{}", env!("CARGO_PKG_VERSION"))
+}
+
+/// Extracts the tag from GitHub's /releases/latest redirect target.
+fn latest_release_tag_from_url(url: &str) -> Result<String> {
+    let Some((_, tag_and_suffix)) = url.split_once("/releases/tag/") else {
+        bail!("latest diskd release redirect did not point to a tag: {url}");
+    };
+    let tag = tag_and_suffix
+        .split(['?', '#'])
+        .next()
+        .unwrap_or("")
+        .trim_matches('/');
+    if tag.is_empty() {
+        bail!("latest diskd release redirect had an empty tag: {url}");
+    }
+    Ok(tag.to_owned())
+}
+
+/// Builds deterministic release metadata from a tag and release target.
+fn release_from_tag(tag_name: &str, target: &str) -> GitHubRelease {
+    let tag_name = normalize_release_tag(tag_name);
+    let archive_name = release_archive_name(&tag_name, target);
+    let checksum_name = release_checksum_name(&tag_name, target);
+    GitHubRelease {
+        tag_name: tag_name.clone(),
+        html_url: release_page_url(&tag_name),
+        assets: vec![
+            GitHubReleaseAsset {
+                name: archive_name.clone(),
+                browser_download_url: release_asset_url(&tag_name, &archive_name),
+            },
+            GitHubReleaseAsset {
+                name: checksum_name.clone(),
+                browser_download_url: release_asset_url(&tag_name, &checksum_name),
+            },
+        ],
+    }
+}
+
+/// Builds the public GitHub release page URL for a tag.
+fn release_page_url(tag_name: &str) -> String {
+    format!("{GITHUB_BASE_URL}/{GITHUB_REPOSITORY}/releases/tag/{tag_name}")
+}
+
+/// Builds the public GitHub release asset URL for a deterministic asset name.
+fn release_asset_url(tag_name: &str, asset_name: &str) -> String {
+    format!("{GITHUB_BASE_URL}/{GITHUB_REPOSITORY}/releases/download/{tag_name}/{asset_name}")
 }
 
 /// Resolves whether a GitHub release can update this binary on this platform.
@@ -2891,6 +2936,36 @@ mod tests {
 
         assert_eq!(pair.archive_url, "https://example.test/archive");
         assert_eq!(pair.checksum_url, "https://example.test/checksum");
+    }
+
+    #[test]
+    fn builds_release_metadata_from_latest_redirect_tag() {
+        /* REQ-DISKD-CLI-034: Update discovery must avoid GitHub REST rate limits by using the public latest-release redirect. */
+        let tag = latest_release_tag_from_url(
+            "https://github.com/diskd-ai/diskd-cli/releases/tag/v0.2.0?expanded=true",
+        )
+        .unwrap();
+
+        let release = release_from_tag(&tag, "x86_64-apple-darwin");
+        let pair = select_release_asset_pair(&release, "x86_64-apple-darwin").unwrap();
+
+        assert_eq!(tag, "v0.2.0");
+        assert_eq!(release.tag_name, "v0.2.0");
+        assert_eq!(
+            release.html_url,
+            "https://github.com/diskd-ai/diskd-cli/releases/tag/v0.2.0"
+        );
+        assert_eq!(
+            pair.archive_url,
+            "https://github.com/diskd-ai/diskd-cli/releases/download/v0.2.0/diskd-v0.2.0-x86_64-apple-darwin.tar.gz"
+        );
+        assert_eq!(
+            pair.checksum_url,
+            "https://github.com/diskd-ai/diskd-cli/releases/download/v0.2.0/diskd-v0.2.0-x86_64-apple-darwin.tar.gz.sha256"
+        );
+        assert!(
+            latest_release_tag_from_url("https://github.com/diskd-ai/diskd-cli/releases").is_err()
+        );
     }
 
     #[test]

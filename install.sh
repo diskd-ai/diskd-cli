@@ -52,9 +52,18 @@ resolve_version() {
   fi
 
   need curl
-  curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" |
-    sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' |
-    head -n 1
+  latest_url="$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest")"
+  case "$latest_url" in
+    */releases/tag/*)
+      version="${latest_url##*/releases/tag/}"
+      version="${version%%\?*}"
+      version="${version%%\#*}"
+      printf '%s\n' "$version"
+      ;;
+    *)
+      fail "could not resolve latest release from $latest_url"
+      ;;
+  esac
 }
 
 resolve_install_dir() {
@@ -118,4 +127,3 @@ main() {
 }
 
 main "$@"
-
