@@ -120,7 +120,7 @@ diskd --json ls docs
 
 ```sh
 diskd ls [path] [--recursive] [--long]    # <DIR>/<FILE>, size, index status, name + display metadata
-diskd tree [path] -L 2 -s                 # recursive Drive tree, depth-limited
+diskd tree [path] -L 2 -s                 # Drive tree with depth-limited traversal
 diskd glob "**/*.pdf" [--path docs]
 diskd grep "exact text" [path...] --limit 10 --offset 0
 diskd vsearch "semantic query" [path...] --limit 10 --offset 0

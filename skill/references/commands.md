@@ -32,7 +32,7 @@ the subcommand, and put command flags after the subcommand.
 | Command | Positional args | Command flags | API/behavior | Output notes |
 | --- | --- | --- | --- | --- |
 | `ls` | `[path]` default context root | `--recursive`, `--long`, `--show-hidden`, `--show-system` | `paths/tools/ls` with `path`, optional booleans | Text is ls-like: type marker (`<DIR>`, `<FILE>`), size, indexing status, then copyable Drive name with display metadata in parentheses. `--json` preserves raw entries. |
-| `tree` | `[path]` default context root | `-L`/`--depth <n>` (`--deep` alias), `-a`/`--all`, `-d`/`--dirs-only`, `-f`/`--full-path`, `-s`/`--size`, `--show-system` | recursive `paths/tools/ls` with `path`, `recursive=true`, optional visibility booleans | ASCII tree over Drive entries. `--json` preserves raw recursive ls response. |
+| `tree` | `[path]` default context root | `-L`/`--depth <n>` (`--deep` alias), `-a`/`--all`, `-d`/`--dirs-only`, `-f`/`--full-path`, `-s`/`--size`, `--show-system` | bounded `paths/tools/ls` calls when depth is set; recursive `paths/tools/ls` without depth | ASCII tree over Drive entries. `--json` prints the collected listing. |
 | `glob` | `<pattern>` | `--path <dir>`, `--show-hidden`, `--show-system` | `paths/tools/glob` with `pattern`, optional `path` | Returns matching path entries. |
 | `grep` | `<query> [paths...]` | `--limit <n>`, `--offset <n>`, unsupported parser-only `--ignore-case`, `--files-with-matches` | `paths/tools/grep` with `query`, normalized `paths`, optional `limit`, `offset` | Exact/BM25 indexed document search. Omitted paths search the context root. |
 | `vsearch` | `<query> [paths...]` | `--limit <n>`, `--top <n>` alias, `--offset <n>` | `paths/tools/vsearch` with `query`, normalized `paths`, optional `limit`, `offset` | Semantic search. Prefer file paths when directory vector search is unreliable. |
@@ -101,7 +101,10 @@ backend response unchanged for scripts.
 diskd tree [path] [-L depth] [-a] [-d] [-f] [-s] [--show-system]
 ```
 
-Drive method: recursive `paths/tools/ls`. Path defaults to the context root.
+Drive method: `paths/tools/ls`. Path defaults to the context root. When depth
+is set, the CLI lists each displayed directory level non-recursively so `-L 2`
+does not fetch the full subtree before rendering. Without depth, the CLI uses
+one recursive listing.
 
 Useful system-`tree` style flags:
 
@@ -114,8 +117,7 @@ Useful system-`tree` style flags:
 | `-s`, `--size` | Show byte size beside each entry. |
 | `--show-system` | Include system entries. |
 
-Use `diskd --json tree` to keep the backend recursive listing unchanged for
-scripts.
+Use `diskd --json tree` to print the listing collected for the tree renderer.
 
 ### `glob`
 

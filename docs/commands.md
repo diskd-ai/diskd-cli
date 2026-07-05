@@ -24,7 +24,7 @@ Global flags must be placed before the subcommand.
 | Command | Positional args | Command flags | API/behavior | Output notes |
 | --- | --- | --- | --- | --- |
 | `ls` | `[path]` default context root | `--recursive`, `--long`, `--show-hidden`, `--show-system` | `paths/tools/ls` | Text is ls-like: type marker (`<DIR>`, `<FILE>`), size, indexing status, then copyable Drive name with display metadata in parentheses; `--json` preserves raw entries. |
-| `tree` | `[path]` default context root | `-L`/`--depth <n>` (`--deep` alias), `-a`/`--all`, `-d`/`--dirs-only`, `-f`/`--full-path`, `-s`/`--size`, `--show-system` | recursive `paths/tools/ls` | ASCII tree over Drive entries; `--json` preserves raw recursive ls response. |
+| `tree` | `[path]` default context root | `-L`/`--depth <n>` (`--deep` alias), `-a`/`--all`, `-d`/`--dirs-only`, `-f`/`--full-path`, `-s`/`--size`, `--show-system` | bounded `paths/tools/ls` calls when depth is set; recursive `paths/tools/ls` without depth | ASCII tree over Drive entries; `--json` prints the collected listing. |
 | `glob` | `<pattern>` | `--path <dir>`, `--show-hidden`, `--show-system` | `paths/tools/glob` | Matching path entries. |
 | `grep` | `<query> [paths...]` | `--limit <n>`, `--offset <n>` | `paths/tools/grep` | Exact/BM25 search; omitted paths use context root. |
 | `vsearch` | `<query> [paths...]` | `--limit <n>`, `--top <n>` alias, `--offset <n>` | `paths/tools/vsearch` | Semantic search; prefer file paths when possible. |
@@ -208,7 +208,9 @@ backend response unchanged for scripts.
 diskd tree [path] [-L depth] [-a] [-d] [-f] [-s] [--show-system]
 ```
 
-Calls `paths/tools/ls` once with `recursive=true`, then renders an ASCII tree.
+When depth is set, calls `paths/tools/ls` non-recursively per displayed
+directory level so `-L 2` does not fetch the full subtree before rendering.
+Without depth, calls `paths/tools/ls` once with `recursive=true`.
 Useful system-`tree` style flags:
 
 | Flag | Purpose |
@@ -229,8 +231,7 @@ docs
     `-- <FILE>       17 q1.pdf (Q1 Report)
 ```
 
-Use `diskd --json tree` to keep the backend recursive listing unchanged for
-scripts.
+Use `diskd --json tree` to print the listing collected for the tree renderer.
 
 ### `glob`
 

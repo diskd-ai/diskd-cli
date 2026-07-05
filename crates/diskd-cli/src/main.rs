@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
@@ -490,12 +490,13 @@ fn run_drive_command(cli: &Cli, state: &RuntimeState) -> Result<()> {
             show_system,
         } => {
             let normalized_path = normalize_drive_path(&context, path.as_deref())?;
-            let result = client.call_drive(&ls_request(
-                Some(normalized_path.as_str()),
-                Some(true),
-                flag_opt(*all),
-                flag_opt(*show_system),
-            ))?;
+            let result = collect_tree_listing(
+                &mut client,
+                normalized_path.as_str(),
+                *depth,
+                *all,
+                *show_system,
+            )?;
             let root_label = tree_root_label(path.as_deref(), normalized_path.as_str(), *full_path);
             render_tree(
                 &result,
@@ -2475,6 +2476,13 @@ struct TreeItem {
     is_dir: bool,
 }
 
+/// Stores a directory path still needing a bounded tree listing request.
+#[derive(Debug, Clone)]
+struct TreeListTask {
+    path: String,
+    depth: usize,
+}
+
 impl TreeItem {
     /// Creates a synthetic directory for parent path components absent from a response.
     fn directory_placeholder(label: &str) -> Self {
@@ -2496,6 +2504,88 @@ impl TreeNode {
             children: BTreeMap::new(),
         }
     }
+}
+
+/// Collects Drive entries for tree rendering, applying -L before network traversal.
+fn collect_tree_listing(
+    client: &mut GatewayClient,
+    root_path: &str,
+    depth: Option<usize>,
+    show_hidden: bool,
+    show_system: bool,
+) -> Result<Value> {
+    let Some(max_depth) = depth else {
+        return Ok(client.call_drive(&ls_request(
+            Some(root_path),
+            Some(true),
+            flag_opt(show_hidden),
+            flag_opt(show_system),
+        ))?);
+    };
+
+    let entries =
+        collect_depth_limited_tree_entries(client, root_path, max_depth, show_hidden, show_system)?;
+    Ok(json!({ "entries": entries }))
+}
+
+/// Walks a Drive tree with non-recursive ls calls up to the requested depth.
+fn collect_depth_limited_tree_entries(
+    client: &mut GatewayClient,
+    root_path: &str,
+    max_depth: usize,
+    show_hidden: bool,
+    show_system: bool,
+) -> Result<Vec<Value>> {
+    if max_depth == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut entries = Vec::new();
+    let mut queue = VecDeque::from([TreeListTask {
+        path: root_path.to_owned(),
+        depth: 0,
+    }]);
+
+    while let Some(task) = queue.pop_front() {
+        if task.depth >= max_depth {
+            continue;
+        }
+
+        let result = client.call_drive(&ls_request(
+            Some(task.path.as_str()),
+            None,
+            flag_opt(show_hidden),
+            flag_opt(show_system),
+        ))?;
+        let listed_entries = result
+            .get("entries")
+            .or_else(|| result.get("items"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+
+        for mut entry in listed_entries {
+            let full_path = ls_entry_full_path(&entry)
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| join_drive_child_path(&task.path, &ls_entry_path_name(&entry)));
+            if ls_entry_full_path(&entry).is_none() {
+                if let Some(object) = entry.as_object_mut() {
+                    object.insert("full_path".to_owned(), Value::String(full_path.clone()));
+                }
+            }
+
+            let item = tree_item_from_entry(&entry);
+            if item.is_dir && task.depth + 1 < max_depth {
+                queue.push_back(TreeListTask {
+                    path: full_path,
+                    depth: task.depth + 1,
+                });
+            }
+            entries.push(entry);
+        }
+    }
+
+    Ok(entries)
 }
 
 /// Renders a recursive ls response as an ASCII tree for humans or raw JSON for scripts.
@@ -2602,6 +2692,24 @@ fn split_tree_path(path: &str) -> Vec<String> {
         .filter(|component| !component.is_empty())
         .map(ToOwned::to_owned)
         .collect()
+}
+
+/// Builds a child Drive path when a list entry omits full_path metadata.
+fn join_drive_child_path(parent: &str, child: &str) -> String {
+    let parent = parent.trim_end_matches('/');
+    let child = child.trim_matches('/');
+    if child.is_empty() {
+        return if parent.is_empty() {
+            "/".to_owned()
+        } else {
+            parent.to_owned()
+        };
+    }
+    if parent.is_empty() {
+        format!("/{child}")
+    } else {
+        format!("{parent}/{child}")
+    }
 }
 
 /// Inserts one Drive item into the tree, creating placeholder parent dirs as needed.

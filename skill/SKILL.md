@@ -77,7 +77,7 @@ diskd --json vsearch "contract renewal clauses" docs/report.pdf --top 5
 | Command | Purpose |
 | --- | --- |
 | `ls [path]` | List a Drive path as `<DIR>/<FILE>`, size, indexing status, and copyable name with display metadata. Flags: `--recursive`, `--long`, `--show-hidden`, `--show-system`. |
-| `tree [path]` | Render a recursive Drive tree. Flags: `-L`/`--depth`/`--deep <n>`, `-a`/`--all`, `-d`/`--dirs-only`, `-f`/`--full-path`, `-s`/`--size`, `--show-system`. |
+| `tree [path]` | Render a Drive tree with bounded traversal when depth is set. Flags: `-L`/`--depth`/`--deep <n>`, `-a`/`--all`, `-d`/`--dirs-only`, `-f`/`--full-path`, `-s`/`--size`, `--show-system`. |
 | `glob <pattern>` | Glob match. Flags: `--path <dir>`, `--show-hidden`, `--show-system`. |
 | `grep <query> [paths...]` | Exact/BM25 content search. Flags: `--limit`, `--offset`. Paths default to the context root. |
 | `vsearch <query> [paths...]` | Semantic search. Flags: `--limit` (alias `--top`), `--offset`. |

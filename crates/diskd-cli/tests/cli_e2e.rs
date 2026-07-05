@@ -151,10 +151,10 @@ fn ls_normalizes_project_path_and_uses_bearer_auth() {
     );
 }
 
-/* REQ-DISKD-CLI-033: tree must call recursive Drive ls once and render depth-limited copyable names with display metadata. */
+/* REQ-DISKD-CLI-033: tree -L must bound Drive traversal before rendering copyable names with display metadata. */
 #[test]
 fn tree_renders_recursive_ls_with_depth_and_sizes() {
-    let gateway = start_gateway(1, |_, mut request| {
+    let gateway = start_gateway(2, |index, mut request| {
         assert_eq!(request.method().as_str(), "POST");
         assert_eq!(request.url(), "/v1/os/drive/api/v1");
         assert_eq!(
@@ -163,24 +163,42 @@ fn tree_renders_recursive_ls_with_depth_and_sizes() {
         );
         let body = request_json(&mut request);
         assert_eq!(body["method"], "paths/tools/ls");
-        assert_eq!(body["params"]["path"], "/Projects/01PROJECT/docs");
-        assert_eq!(body["params"]["recursive"], true);
+        assert_eq!(body["params"].get("recursive"), None);
         assert_eq!(body["params"]["show_hidden"], true);
-        respond_json(
-            request,
-            json!({
-                "jsonrpc": "2.0",
-                "id": body["id"],
-                "result": {
-                    "entries": [
-                        { "name": "reports", "metadata": { "displayName": "Reports" }, "type": "dir", "full_path": "/Projects/01PROJECT/docs/reports", "size": 0 },
-                        { "name": "q1.pdf", "displayName": "Q1 Report", "type": "file", "full_path": "/Projects/01PROJECT/docs/reports/q1.pdf", "size": 17 },
-                        { "name": "old.txt", "type": "file", "full_path": "/Projects/01PROJECT/docs/reports/archive/old.txt", "size": 1 },
-                        { "name": "a.txt", "displayName": "A Document", "type": "file", "full_path": "/Projects/01PROJECT/docs/a.txt", "size": 5 }
-                    ]
-                }
-            }),
-        );
+        match index {
+            0 => {
+                assert_eq!(body["params"]["path"], "/Projects/01PROJECT/docs");
+                respond_json(
+                    request,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "result": {
+                            "entries": [
+                                { "name": "reports", "metadata": { "displayName": "Reports" }, "type": "dir", "full_path": "/Projects/01PROJECT/docs/reports", "size": 0 },
+                                { "name": "a.txt", "displayName": "A Document", "type": "file", "full_path": "/Projects/01PROJECT/docs/a.txt", "size": 5 }
+                            ]
+                        }
+                    }),
+                );
+            }
+            1 => {
+                assert_eq!(body["params"]["path"], "/Projects/01PROJECT/docs/reports");
+                respond_json(
+                    request,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "result": {
+                            "entries": [
+                                { "name": "q1.pdf", "displayName": "Q1 Report", "type": "file", "full_path": "/Projects/01PROJECT/docs/reports/q1.pdf", "size": 17 }
+                            ]
+                        }
+                    }),
+                );
+            }
+            _ => unreachable!("unexpected request index"),
+        }
     });
     let home = TempDir::new().unwrap();
 
