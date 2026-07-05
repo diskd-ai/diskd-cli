@@ -302,6 +302,119 @@ pub fn biquery_request(query: &str, paths: &[String]) -> JsonRpcRequest {
     )
 }
 
+/// Creates a generic Drive DB database with optional schema, location, and type.
+pub fn database_create_request(
+    name: &str,
+    schema: Option<Value>,
+    check_exists: Option<bool>,
+    recreate: Option<bool>,
+    directory: Option<&str>,
+    db_type: Option<&str>,
+) -> JsonRpcRequest {
+    let mut params = vec![param_string("name", name)];
+    if let Some(schema) = schema {
+        params.push(param_json("schema", schema));
+    }
+    if let Some(check_exists) = check_exists {
+        params.push(param_bool("check_exists", check_exists));
+    }
+    if let Some(recreate) = recreate {
+        params.push(param_bool("recreate", recreate));
+    }
+    if let Some(directory) = directory {
+        params.push(param_string("directory", directory));
+    }
+    if let Some(db_type) = db_type {
+        params.push(param_string("db_type", db_type));
+    }
+    request("drive/db/create", params)
+}
+
+/// Creates a generic Drive DB insert request with row objects supplied as JSON.
+pub fn database_insert_request(
+    name: &str,
+    table: &str,
+    rows: Value,
+    db_type: Option<&str>,
+) -> JsonRpcRequest {
+    let mut params = vec![
+        param_string("name", name),
+        param_string("table", table),
+        param_json("rows", rows),
+    ];
+    if let Some(db_type) = db_type {
+        params.push(param_string("db_type", db_type));
+    }
+    request("drive/db/insert", params)
+}
+
+/// Creates a generic Drive DB SQL query request with optional positional parameters.
+pub fn database_query_request(
+    name: &str,
+    sql: &str,
+    parameters: Option<Value>,
+    db_type: Option<&str>,
+) -> JsonRpcRequest {
+    let mut params = vec![param_string("name", name), param_string("sql", sql)];
+    if let Some(parameters) = parameters {
+        params.push(param_json("parameters", parameters));
+    }
+    if let Some(db_type) = db_type {
+        params.push(param_string("db_type", db_type));
+    }
+    request("drive/db/query", params)
+}
+
+/// Creates a generic Drive DB commit request.
+pub fn database_commit_request(name: &str, db_type: Option<&str>) -> JsonRpcRequest {
+    database_name_only_request("drive/db/commit", name, db_type)
+}
+
+/// Creates a generic Drive DB rollback request.
+pub fn database_rollback_request(name: &str, db_type: Option<&str>) -> JsonRpcRequest {
+    database_name_only_request("drive/db/rollback", name, db_type)
+}
+
+/// Creates a generic Drive DB metadata request.
+pub fn database_metadata_request(name: &str, db_type: Option<&str>) -> JsonRpcRequest {
+    database_name_only_request("drive/db/metadata", name, db_type)
+}
+
+/// Creates a generic Drive DB drop request.
+pub fn database_drop_request(name: &str, db_type: Option<&str>) -> JsonRpcRequest {
+    database_name_only_request("drive/db/drop", name, db_type)
+}
+
+/// Creates a Drive DB status update request for processor-visible database files.
+pub fn database_set_status_request(
+    name: &str,
+    status: &str,
+    error: Option<&str>,
+    db_type: Option<&str>,
+) -> JsonRpcRequest {
+    let mut params = vec![param_string("name", name), param_string("status", status)];
+    if let Some(error) = error {
+        params.push(param_string("error", error));
+    }
+    if let Some(db_type) = db_type {
+        params.push(param_string("db_type", db_type));
+    }
+    request("drive/db/set-status", params)
+}
+
+/// Creates a Drive DB inode resolution request.
+pub fn database_resolve_by_inode_request(db_inode: &str, db_type: Option<&str>) -> JsonRpcRequest {
+    database_inode_request("drive/db/resolve-by-inode", db_inode, db_type)
+}
+
+/// Creates a Drive DB inode resolution request that also reads settings.
+pub fn database_resolve_with_settings_request(
+    db_inode: &str,
+    db_type: Option<&str>,
+) -> JsonRpcRequest {
+    database_inode_request("drive/db/resolve-with-settings", db_inode, db_type)
+}
+
 /// Creates a Telegram Drive DB database with optional schema and placement flags.
 pub fn telegram_db_create_request(
     name: &str,
@@ -520,6 +633,30 @@ fn param_bool(name: &str, value: bool) -> RpcParam {
         name: name.to_owned(),
         value: RpcValue::Bool(value),
     }
+}
+
+fn database_name_only_request(
+    method: &'static str,
+    name: &str,
+    db_type: Option<&str>,
+) -> JsonRpcRequest {
+    let mut params = vec![param_string("name", name)];
+    if let Some(db_type) = db_type {
+        params.push(param_string("db_type", db_type));
+    }
+    request(method, params)
+}
+
+fn database_inode_request(
+    method: &'static str,
+    db_inode: &str,
+    db_type: Option<&str>,
+) -> JsonRpcRequest {
+    let mut params = vec![param_string("db_inode", db_inode)];
+    if let Some(db_type) = db_type {
+        params.push(param_string("db_type", db_type));
+    }
+    request(method, params)
 }
 
 fn param_json(name: &str, value: Value) -> RpcParam {
@@ -785,6 +922,143 @@ mod tests {
                     value: RpcValue::StringList(vec!["/Projects/01PROJECT/sheet.xlsx".to_owned()]),
                 },
             ]
+        );
+    }
+
+    /* REQ-DISKD-CLI-030: Generic database commands must expose the Drive DB JSON-RPC working API with optional db_type. */
+    #[test]
+    fn builds_database_requests() {
+        let schema = json!({
+            "items": ["CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, text TEXT)"]
+        });
+        let rows = json!([{ "id": 1, "text": "hello" }]);
+        let parameters = json!(["hello"]);
+
+        assert_eq!(
+            database_create_request(
+                "generic-db",
+                Some(schema.clone()),
+                Some(true),
+                Some(false),
+                Some("/Databases"),
+                Some("telegram")
+            ),
+            JsonRpcRequest {
+                jsonrpc: "2.0",
+                method: "drive/db/create",
+                params: vec![
+                    RpcParam {
+                        name: "name".to_owned(),
+                        value: RpcValue::String("generic-db".to_owned()),
+                    },
+                    RpcParam {
+                        name: "schema".to_owned(),
+                        value: RpcValue::Json(schema),
+                    },
+                    RpcParam {
+                        name: "check_exists".to_owned(),
+                        value: RpcValue::Bool(true),
+                    },
+                    RpcParam {
+                        name: "recreate".to_owned(),
+                        value: RpcValue::Bool(false),
+                    },
+                    RpcParam {
+                        name: "directory".to_owned(),
+                        value: RpcValue::String("/Databases".to_owned()),
+                    },
+                    RpcParam {
+                        name: "db_type".to_owned(),
+                        value: RpcValue::String("telegram".to_owned()),
+                    },
+                ],
+            }
+        );
+
+        assert_eq!(
+            database_insert_request("generic-db", "messages", rows.clone(), Some("telegram")),
+            JsonRpcRequest {
+                jsonrpc: "2.0",
+                method: "drive/db/insert",
+                params: vec![
+                    RpcParam {
+                        name: "name".to_owned(),
+                        value: RpcValue::String("generic-db".to_owned()),
+                    },
+                    RpcParam {
+                        name: "table".to_owned(),
+                        value: RpcValue::String("messages".to_owned()),
+                    },
+                    RpcParam {
+                        name: "rows".to_owned(),
+                        value: RpcValue::Json(rows),
+                    },
+                    RpcParam {
+                        name: "db_type".to_owned(),
+                        value: RpcValue::String("telegram".to_owned()),
+                    },
+                ],
+            }
+        );
+
+        assert_eq!(
+            database_query_request(
+                "generic-db",
+                "SELECT * FROM messages WHERE text = ?",
+                Some(parameters.clone()),
+                Some("telegram")
+            ),
+            JsonRpcRequest {
+                jsonrpc: "2.0",
+                method: "drive/db/query",
+                params: vec![
+                    RpcParam {
+                        name: "name".to_owned(),
+                        value: RpcValue::String("generic-db".to_owned()),
+                    },
+                    RpcParam {
+                        name: "sql".to_owned(),
+                        value: RpcValue::String("SELECT * FROM messages WHERE text = ?".to_owned()),
+                    },
+                    RpcParam {
+                        name: "parameters".to_owned(),
+                        value: RpcValue::Json(parameters),
+                    },
+                    RpcParam {
+                        name: "db_type".to_owned(),
+                        value: RpcValue::String("telegram".to_owned()),
+                    },
+                ],
+            }
+        );
+
+        assert_eq!(
+            database_commit_request("generic-db", Some("telegram")).method,
+            "drive/db/commit"
+        );
+        assert_eq!(
+            database_rollback_request("generic-db", Some("telegram")).method,
+            "drive/db/rollback"
+        );
+        assert_eq!(
+            database_metadata_request("generic-db", Some("telegram")).method,
+            "drive/db/metadata"
+        );
+        assert_eq!(
+            database_drop_request("generic-db", Some("telegram")).method,
+            "drive/db/drop"
+        );
+        assert_eq!(
+            database_set_status_request("generic-db", "ready", Some("ok"), Some("telegram")).method,
+            "drive/db/set-status"
+        );
+        assert_eq!(
+            database_resolve_by_inode_request("inode-1", Some("telegram")).method,
+            "drive/db/resolve-by-inode"
+        );
+        assert_eq!(
+            database_resolve_with_settings_request("inode-1", Some("telegram")).method,
+            "drive/db/resolve-with-settings"
         );
     }
 

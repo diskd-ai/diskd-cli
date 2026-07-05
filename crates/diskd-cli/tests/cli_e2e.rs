@@ -423,6 +423,170 @@ fn search_commands_pass_limit_and_offset() {
     assert!(vsearch.status.success(), "{}", stderr_text(&vsearch));
 }
 
+/* REQ-DISKD-CLI-030: database/db must expose generic Drive DB JSON-RPC methods with optional db_type. */
+#[test]
+fn database_commands_call_drive_db_api() {
+    let home = TempDir::new().unwrap();
+    let rows_file = write_fixture_file(&home, "db-rows.json", br#"[{"id":1,"text":"hello"}]"#);
+    let gateway = start_gateway(4, |index, mut request| {
+        assert_eq!(request.method().as_str(), "POST");
+        assert_eq!(request.url(), "/v1/os/drive/api/v1");
+        let body = request_json(&mut request);
+        match index {
+            0 => {
+                assert_eq!(body["method"], "drive/db/create");
+                assert_eq!(body["params"]["name"], "generic-db");
+                assert_eq!(body["params"]["db_type"], "telegram");
+                assert_eq!(
+                    body["params"]["schema"]["items"][0],
+                    "CREATE TABLE messages (id INTEGER PRIMARY KEY, text TEXT)"
+                );
+                respond_json(
+                    request,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "result": {
+                            "db_inode": "db-inode-1",
+                            "file_id": "file-1",
+                            "name": "generic-db.telegram",
+                            "status": "ready"
+                        }
+                    }),
+                );
+            }
+            1 => {
+                assert_eq!(body["method"], "drive/db/insert");
+                assert_eq!(body["params"]["name"], "generic-db");
+                assert_eq!(body["params"]["table"], "messages");
+                assert_eq!(body["params"]["db_type"], "telegram");
+                assert_eq!(
+                    body["params"]["rows"],
+                    json!([{ "id": 1, "text": "hello" }])
+                );
+                respond_json(
+                    request,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "result": {
+                            "inserted": 1,
+                            "pending_rows": 1,
+                            "status": "pending"
+                        }
+                    }),
+                );
+            }
+            2 => {
+                assert_eq!(body["method"], "drive/db/query");
+                assert_eq!(body["params"]["name"], "generic-db");
+                assert_eq!(body["params"]["db_type"], "telegram");
+                assert_eq!(
+                    body["params"]["sql"],
+                    "SELECT id, text FROM messages WHERE text = ?"
+                );
+                assert_eq!(body["params"]["parameters"], json!(["hello"]));
+                respond_json(
+                    request,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "result": {
+                            "rows": [{ "id": 1, "text": "hello" }]
+                        }
+                    }),
+                );
+            }
+            3 => {
+                assert_eq!(body["method"], "drive/db/resolve-with-settings");
+                assert_eq!(body["params"]["db_inode"], "db-inode-1");
+                assert_eq!(body["params"]["db_type"], "telegram");
+                respond_json(
+                    request,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "result": {
+                            "name": "generic-db.telegram",
+                            "db_inode": "db-inode-1",
+                            "file_id": "file-1",
+                            "status": "ready",
+                            "db_type": "telegram",
+                            "settings": { "title": "Generic DB" }
+                        }
+                    }),
+                );
+            }
+            _ => unreachable!(),
+        }
+    });
+
+    let create = run_diskd(
+        &home,
+        &gateway.base_url,
+        &[
+            "--json",
+            "database",
+            "create",
+            "generic-db",
+            "--schema",
+            r#"{"items":["CREATE TABLE messages (id INTEGER PRIMARY KEY, text TEXT)"]}"#,
+            "--db-type",
+            "telegram",
+        ],
+    );
+    let insert = run_diskd(
+        &home,
+        &gateway.base_url,
+        &[
+            "--json",
+            "db",
+            "insert",
+            "generic-db",
+            "messages",
+            "--rows-file",
+            rows_file.to_str().unwrap(),
+            "--db-type",
+            "telegram",
+        ],
+    );
+    let query = run_diskd(
+        &home,
+        &gateway.base_url,
+        &[
+            "--json",
+            "database",
+            "query",
+            "generic-db",
+            "SELECT id, text FROM messages WHERE text = ?",
+            "--parameters",
+            r#"["hello"]"#,
+            "--db-type",
+            "telegram",
+        ],
+    );
+    let resolve = run_diskd(
+        &home,
+        &gateway.base_url,
+        &[
+            "--json",
+            "db",
+            "resolve-with-settings",
+            "db-inode-1",
+            "--db-type",
+            "telegram",
+        ],
+    );
+
+    gateway.join();
+    assert!(create.status.success(), "{}", stderr_text(&create));
+    assert!(insert.status.success(), "{}", stderr_text(&insert));
+    assert!(query.status.success(), "{}", stderr_text(&query));
+    assert!(resolve.status.success(), "{}", stderr_text(&resolve));
+    let printed: Value = serde_json::from_str(&stdout_text(&resolve)).unwrap();
+    assert_eq!(printed["settings"]["title"], "Generic DB");
+}
+
 /* REQ-DISKD-CLI-029: telegram-db must expose the Drive Telegram DB JSON-RPC API for create, insert, and query workflows. */
 #[test]
 fn telegram_db_commands_call_drive_telegram_api() {

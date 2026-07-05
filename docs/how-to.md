@@ -89,6 +89,28 @@ diskd --json biquery "what is the total amount?" data/table.csv
 diskd --json biquery "which name has the highest amount?" data/table.csv
 ```
 
+## Work with a Generic Drive DB
+
+Create a generic DB:
+
+```sh
+diskd --json database create generic-db \
+  --schema '{"items":["CREATE TABLE messages (id INTEGER PRIMARY KEY, text TEXT)"]}'
+```
+
+Insert and query rows:
+
+```sh
+diskd --json db insert generic-db messages --rows '[{"id":1,"text":"hello"}]'
+diskd --json database query generic-db \
+  "SELECT id, text FROM messages WHERE text = ?" \
+  --parameters '["hello"]'
+```
+
+Pass `--db-type telegram`, `--db-type webarchive`, `--db-type session`, or
+another supported backend type when the backend needs to disambiguate a typed
+Drive DB.
+
 ## Work with a Telegram Drive DB
 
 Create a Telegram DB:

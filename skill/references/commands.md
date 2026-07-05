@@ -5,7 +5,7 @@ Complete flag-by-flag reference. Global flags always precede the subcommand.
 ## Contents
 
 - [Global flags](#global-flags)
-- [Read and query](#read-and-query): `ls`, `glob`, `grep`, `vsearch`, `cat`, `read`, `stat`, `biquery`, `telegram-db`
+- [Read and query](#read-and-query): `ls`, `glob`, `grep`, `vsearch`, `cat`, `read`, `stat`, `biquery`, `database`, `telegram-db`
 - [Write and manage](#write-and-manage): `upload`, `mkdir`, `rm`, `mv`, `cp`, `sync`
 - [Auth and meta](#auth-and-meta): `login`, `logout`, `whoami`, `version`, `update`
 - [Project context](#project-context): `set-context`, `get-context`
@@ -39,6 +39,16 @@ the subcommand, and put command flags after the subcommand.
 | `read` | `<path>` | `--limit <n>`/`--parts-limit <n>`, `--offset <n>`/`--parts-offset <n>` | `paths/tools/read` with `path`, optional `parts_limit`, `parts_offset` | Returns structured parts plus `total_parts`, `next_offset`, `eof`. |
 | `stat` | `<path>` | none | `paths/tools/inode-ls` | Returns path metadata. |
 | `biquery` | `<question> [paths...]` | none | `paths/tools/bi-query` with natural-language `query`, normalized `paths` | Question is not SQL. Use for indexed `.csv`, `.tsv`, `.xls`, `.xlsx`, `.mailbox`. |
+| `database create` (`db create`) | `<name>` | `--schema <json>`, `--schema-file <path>`, `--check-exists`, `--recreate`, `--directory <dir>`, `--db-type <type>` | `drive/db/create` | Creates a generic Drive DB. |
+| `database insert` | `<name> <table>` | `--rows <json-array>` or `--rows-file <path>`, `--db-type <type>` | `drive/db/insert` | Inserts row objects into a DB table. |
+| `database query` | `<name> <sql>` | `--parameters <json-array>` or `--parameters-file <path>`, `--db-type <type>` | `drive/db/query` | Runs SQL against the named Drive DB. |
+| `database commit` | `<name>` | `--db-type <type>` | `drive/db/commit` | Commits pending DB changes. |
+| `database rollback` | `<name>` | `--db-type <type>` | `drive/db/rollback` | Rolls back pending DB changes. |
+| `database metadata` | `<name>` | `--db-type <type>` | `drive/db/metadata` | Returns DB metadata. |
+| `database drop` | `<name>` | `--db-type <type>` | `drive/db/drop` | Deletes the DB. |
+| `database set-status` | `<name> <status>` | `--error <message>`, `--db-type <type>` | `drive/db/set-status` | Sets processor-visible status on a DB file. |
+| `database resolve-by-inode` | `<db_inode>` | `--db-type <type>` | `drive/db/resolve-by-inode` | Resolves DB name/file id/status from inode. |
+| `database resolve-with-settings` | `<db_inode>` | `--db-type <type>` | `drive/db/resolve-with-settings` | Resolves DB metadata and reads `settings`. |
 | `telegram-db create` | `<name>` | `--schema <json>`, `--schema-file <path>`, `--recreate`, `--directory <dir>` | `drive/telegram/create` | Creates a Telegram DB; handler appends `.telegram` when needed. |
 | `telegram-db insert` | `<name> <table>` | `--rows <json-array>` or `--rows-file <path>` | `drive/telegram/insert` | Inserts row objects into a Telegram DB table. |
 | `telegram-db query` | `<name> <sql>` | `--parameters <json-array>` or `--parameters-file <path>` | `drive/telegram/query` | Runs SQL against the named Telegram DB. |
@@ -150,6 +160,31 @@ Point `paths` at indexed spreadsheet files (`.csv`, `.tsv`, `.xls`, `.xlsx`,
 `.mailbox`). Directory paths are expanded to the spreadsheet files inside them;
 non-spreadsheet files are ignored, and an all-non-spreadsheet path set returns a
 `NO_EXCEL_FILES` error.
+
+### `database` / `db`
+
+```sh
+diskd --json database create generic-db \
+  --schema '{"items":["CREATE TABLE messages (id INTEGER PRIMARY KEY, text TEXT)"]}'
+diskd --json db insert generic-db messages --rows '[{"id":1,"text":"hello"}]'
+diskd --json database query generic-db "SELECT id, text FROM messages LIMIT 20"
+diskd --json database query generic-db "SELECT id FROM messages WHERE text = ?" --parameters '["hello"]'
+diskd --json database commit generic-db
+diskd --json database rollback generic-db
+diskd --json database metadata generic-db
+diskd --json database drop generic-db
+diskd --json database set-status generic-db ready --error "optional diagnostic"
+diskd --json database resolve-by-inode db_inode_value
+diskd --json database resolve-with-settings db_inode_value --db-type telegram
+```
+
+This is the generic Drive DB working API. It calls `drive/db/*`. Use optional
+`--db-type <database|mailbox|telegram|webarchive|session>` when a typed DB needs to be
+disambiguated. JSON argument rules:
+
+- `create --schema`/`--schema-file` must be a JSON object.
+- `insert --rows`/`--rows-file` must be a JSON array of row objects.
+- `query --parameters`/`--parameters-file` must be a JSON array.
 
 ### `telegram-db`
 

@@ -31,6 +31,7 @@ Global flags must be placed before the subcommand.
 | `read` | `<path>` | `--limit`/`--parts-limit`, `--offset`/`--parts-offset` | `paths/tools/read` | Structured parts plus pagination metadata. |
 | `stat` | `<path>` | none | `paths/tools/inode-ls` | Path metadata. |
 | `biquery` | `<question> [paths...]` | none | `paths/tools/bi-query` | Natural-language spreadsheet question, not SQL. |
+| `database` (`db`) | subcommand-specific | `create`, `insert`, `query`, `commit`, `rollback`, `metadata`, `drop`, `set-status`, `resolve-by-inode`, `resolve-with-settings` | `drive/db/*` | Generic Drive DB working API with optional `--db-type`. |
 | `telegram-db` | subcommand-specific | `create`, `insert`, `query`, `commit`, `metadata`, `drop` flags | `drive/telegram/*` | Telegram SQLite DB working API; `query` uses SQL against the named DB. |
 | `upload` | `<local...>` | `--dest <dir>`, `--recursive`, `--force` | upload start, PUT, commit | Uploads files/folders. |
 | `mkdir` | `<path>` | none | `drive/paths/create` | Creates folder. |
@@ -251,6 +252,44 @@ diskd --json biquery "total amount grouped by name" docs/table.csv
 
 Calls `paths/tools/bi-query` for indexed CSV, TSV, XLS, and XLSX files. The
 query is a natural-language question; Drive generates and runs the SQL.
+
+### `database` / `db`
+
+```sh
+diskd --json database create generic-db \
+  --schema '{"items":["CREATE TABLE messages (id INTEGER PRIMARY KEY, text TEXT)"]}'
+diskd --json db insert generic-db messages --rows '[{"id":1,"text":"hello"}]'
+diskd --json database query generic-db "SELECT id, text FROM messages LIMIT 20"
+diskd --json database query generic-db "SELECT id FROM messages WHERE text = ?" --parameters '["hello"]'
+diskd --json database commit generic-db
+diskd --json database rollback generic-db
+diskd --json database metadata generic-db
+diskd --json database drop generic-db
+diskd --json database set-status generic-db ready --error "optional diagnostic"
+diskd --json database resolve-by-inode db_inode_value
+diskd --json database resolve-with-settings db_inode_value --db-type telegram
+```
+
+Drive methods:
+
+```text
+create                -> drive/db/create
+insert                -> drive/db/insert
+query                 -> drive/db/query
+commit                -> drive/db/commit
+rollback              -> drive/db/rollback
+metadata              -> drive/db/metadata
+drop                  -> drive/db/drop
+set-status            -> drive/db/set-status
+resolve-by-inode      -> drive/db/resolve-by-inode
+resolve-with-settings -> drive/db/resolve-with-settings
+```
+
+All `database` operations that address a DB by name accept optional
+`--db-type <database|mailbox|telegram|webarchive|session>`. `create --schema`/
+`--schema-file` must be a JSON object. `insert --rows`/`--rows-file` must be a
+JSON array of row objects. `query --parameters`/`--parameters-file` must be a
+JSON array for positional SQL parameters.
 
 ### `telegram-db`
 
