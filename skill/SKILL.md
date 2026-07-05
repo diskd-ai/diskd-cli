@@ -78,10 +78,10 @@ diskd --json vsearch "contract renewal clauses" docs/report.pdf --top 5
 | --- | --- |
 | `ls [path]` | List a Drive path. Flags: `--recursive`, `--long`, `--show-hidden`, `--show-system`. |
 | `glob <pattern>` | Glob match. Flags: `--path <dir>`, `--show-hidden`, `--show-system`. |
-| `grep <query> [paths...]` | Exact/BM25 content search. Paths default to the context root. |
-| `vsearch <query> [paths...]` | Semantic search. Flag: `--top <n>` (alias `--limit`). |
+| `grep <query> [paths...]` | Exact/BM25 content search. Flags: `--limit`, `--offset`. Paths default to the context root. |
+| `vsearch <query> [paths...]` | Semantic search. Flags: `--limit` (alias `--top`), `--offset`. |
 | `cat <path>` | Stream raw file bytes to stdout. Flag: `--version <n>`. |
-| `read <path>` | Structured indexed document parts. Flags: `--parts-limit`, `--parts-offset`. |
+| `read <path>` | Structured indexed document parts. Flags: `--limit`/`--offset` aliases for `--parts-limit`/`--parts-offset`. |
 | `stat <path>` | Path metadata. |
 | `biquery <question> [paths...]` | Natural-language query over indexed CSV/TSV/XLS/XLSX/mailbox spreadsheets; the backend converts the question to SQL and runs it. |
 | `upload <local...>` | Upload file(s)/folder(s). Flags: `--dest <dir>`, `--recursive`, `--force`. |

@@ -298,3 +298,127 @@ fn cat_streams_downloaded_bytes() {
     assert!(output.status.success(), "{}", stderr_text(&output));
     assert_eq!(output.stdout, b"hello from drive");
 }
+
+/* REQ-DISKD-CLI-027: read must accept --limit/--offset aliases and send parts_limit/parts_offset to Drive. */
+#[test]
+fn read_accepts_limit_offset_aliases() {
+    let gateway = start_gateway(1, |_, mut request| {
+        assert_eq!(request.method().as_str(), "POST");
+        let body = request_json(&mut request);
+        assert_eq!(body["method"], "paths/tools/read");
+        assert_eq!(
+            body["params"]["path"],
+            "/Projects/01PROJECT/docs/report.pdf"
+        );
+        assert_eq!(body["params"]["parts_limit"], 2);
+        assert_eq!(body["params"]["parts_offset"], 4);
+        respond_json(
+            request,
+            json!({
+                "jsonrpc": "2.0",
+                "id": body["id"],
+                "result": {
+                    "parts": [],
+                    "total_parts": 10,
+                    "parts_offset": 4,
+                    "next_offset": 6,
+                    "eof": false
+                }
+            }),
+        );
+    });
+    let home = TempDir::new().unwrap();
+
+    let output = run_diskd(
+        &home,
+        &gateway.base_url,
+        &[
+            "--project",
+            "01PROJECT",
+            "--json",
+            "read",
+            "docs/report.pdf",
+            "--limit",
+            "2",
+            "--offset",
+            "4",
+        ],
+    );
+
+    gateway.join();
+    assert!(output.status.success(), "{}", stderr_text(&output));
+    let printed: Value = serde_json::from_str(&stdout_text(&output)).unwrap();
+    assert_eq!(printed["parts_offset"], 4);
+}
+
+/* REQ-DISKD-CLI-028: search commands must pass limit and offset through to Drive path search. */
+#[test]
+fn search_commands_pass_limit_and_offset() {
+    let gateway = start_gateway(2, |index, mut request| {
+        assert_eq!(request.method().as_str(), "POST");
+        let body = request_json(&mut request);
+        match index {
+            0 => {
+                assert_eq!(body["method"], "paths/tools/grep");
+                assert_eq!(body["params"]["query"], "needle");
+                assert_eq!(body["params"]["paths"], json!(["/Projects/01PROJECT/docs"]));
+                assert_eq!(body["params"]["limit"], 3);
+                assert_eq!(body["params"]["offset"], 6);
+            }
+            1 => {
+                assert_eq!(body["method"], "paths/tools/vsearch");
+                assert_eq!(body["params"]["query"], "semantic needle");
+                assert_eq!(body["params"]["paths"], json!(["/Projects/01PROJECT/docs"]));
+                assert_eq!(body["params"]["limit"], 4);
+                assert_eq!(body["params"]["offset"], 8);
+            }
+            _ => unreachable!(),
+        }
+        respond_json(
+            request,
+            json!({
+                "jsonrpc": "2.0",
+                "id": body["id"],
+                "result": { "documents": [] }
+            }),
+        );
+    });
+    let home = TempDir::new().unwrap();
+
+    let grep = run_diskd(
+        &home,
+        &gateway.base_url,
+        &[
+            "--project",
+            "01PROJECT",
+            "--json",
+            "grep",
+            "needle",
+            "docs",
+            "--limit",
+            "3",
+            "--offset",
+            "6",
+        ],
+    );
+    let vsearch = run_diskd(
+        &home,
+        &gateway.base_url,
+        &[
+            "--project",
+            "01PROJECT",
+            "--json",
+            "vsearch",
+            "semantic needle",
+            "docs",
+            "--limit",
+            "4",
+            "--offset",
+            "8",
+        ],
+    );
+
+    gateway.join();
+    assert!(grep.status.success(), "{}", stderr_text(&grep));
+    assert!(vsearch.status.success(), "{}", stderr_text(&vsearch));
+}

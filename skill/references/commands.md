@@ -45,11 +45,12 @@ Drive method: `paths/tools/glob`. `pattern` is required and positional.
 ### `grep`
 
 ```sh
-diskd --json grep "payment terms" docs contracts
+diskd --json grep "payment terms" docs contracts --limit 20 --offset 0
 ```
 
 Drive method: `paths/tools/grep`. Exact/BM25 search. `query` is required;
-zero or more `paths` follow and default to the context root.
+zero or more `paths` follow and default to the context root. `--limit <n>` and
+`--offset <n>` page matched documents.
 
 `--ignore-case` and `--files-with-matches` are accepted by the parser but
 **rejected at runtime** because the Drive grep contract has no matching fields.
@@ -57,11 +58,12 @@ zero or more `paths` follow and default to the context root.
 ### `vsearch`
 
 ```sh
-diskd --json vsearch "renewal clauses" docs/agreement.pdf --top 5
+diskd --json vsearch "renewal clauses" docs/agreement.pdf --limit 5 --offset 0
 ```
 
-Drive method: `paths/tools/vsearch` (sends `top_k`). `query` required; `paths`
-default to the context root. `--top <n>` (alias `--limit`) caps results.
+Drive method: `paths/tools/vsearch`. `query` required; `paths` default to the
+context root. `--limit <n>` (alias `--top <n>`) and `--offset <n>` page matched
+documents.
 
 Prefer a specific **file** path: directory paths can fail when the backend has
 not expanded directory inodes for vector search. Fall back to `grep` for
@@ -80,11 +82,12 @@ redirection and pipes work.
 ### `read`
 
 ```sh
-diskd --json read docs/report.pdf --parts-limit 5 --parts-offset 0
+diskd --json read docs/report.pdf --limit 5 --offset 0
 ```
 
 Drive method: `paths/tools/read`. Returns structured indexed document parts.
-`--parts-limit <n>` and `--parts-offset <n>` page through parts.
+`--limit <n>` and `--offset <n>` are aliases for `--parts-limit <n>` and
+`--parts-offset <n>` when paging through parts.
 
 ### `stat`
 

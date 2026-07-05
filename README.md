@@ -104,8 +104,8 @@ diskd mkdir docs
 diskd upload ./report.pdf --dest docs --force
 diskd ls docs
 diskd cat docs/report.pdf > report.pdf
-diskd grep "payment terms" docs
-diskd vsearch "contract renewal clauses" docs/report.pdf --top 5
+diskd grep "payment terms" docs --limit 10 --offset 0
+diskd vsearch "contract renewal clauses" docs/report.pdf --limit 5 --offset 0
 ```
 
 Global flags must be placed before the subcommand:
@@ -119,10 +119,10 @@ diskd --json ls docs
 ```sh
 diskd ls [path] [--recursive] [--long]
 diskd glob "**/*.pdf" [--path docs]
-diskd grep "exact text" [path...]
-diskd vsearch "semantic query" [path...] --top 10
+diskd grep "exact text" [path...] --limit 10 --offset 0
+diskd vsearch "semantic query" [path...] --limit 10 --offset 0
 diskd cat path/to/file > local-file
-diskd read path/to/file --parts-limit 3
+diskd read path/to/file --limit 3 --offset 0
 diskd stat path/to/file
 diskd biquery "what is the total amount?" sheet.csv
 diskd upload ./file.txt --dest docs --force

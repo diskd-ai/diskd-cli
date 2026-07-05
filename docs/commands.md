@@ -169,10 +169,11 @@ Calls `paths/tools/glob`.
 ### `grep`
 
 ```sh
-diskd --json grep "payment terms" docs contracts
+diskd --json grep "payment terms" docs contracts --limit 20 --offset 0
 ```
 
 Calls `paths/tools/grep`. Omitted paths default to the current context root.
+`--limit <n>` and `--offset <n>` page matched documents.
 
 `--ignore-case` and `--files-with-matches` are parsed but rejected because the
 current Drive grep contract has no matching fields.
@@ -180,11 +181,12 @@ current Drive grep contract has no matching fields.
 ### `vsearch`
 
 ```sh
-diskd --json vsearch "renewal clauses" docs/agreement.pdf --top 5
+diskd --json vsearch "renewal clauses" docs/agreement.pdf --limit 5 --offset 0
 ```
 
-Calls `paths/tools/vsearch` with `top_k`. The `--limit` alias is also accepted.
-Omitted paths default to the current context root.
+Calls `paths/tools/vsearch`. `--limit <n>` (alias `--top <n>`) and
+`--offset <n>` page matched documents. Omitted paths default to the current
+context root.
 
 ### `cat`
 
@@ -198,10 +200,11 @@ stdout.
 ### `read`
 
 ```sh
-diskd --json read docs/report.pdf --parts-limit 5 --parts-offset 0
+diskd --json read docs/report.pdf --limit 5 --offset 0
 ```
 
 Calls `paths/tools/read` and returns structured indexed document parts.
+`--limit`/`--offset` are aliases for `--parts-limit`/`--parts-offset`.
 
 ### `stat`
 

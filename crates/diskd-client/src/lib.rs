@@ -235,24 +235,41 @@ pub fn glob_request(
 }
 
 /// Creates the resolved grep JSON-RPC request contract.
-pub fn grep_request(query: &str, paths: &[String]) -> JsonRpcRequest {
-    request(
-        "paths/tools/grep",
-        vec![
-            param_string("query", query),
-            param_string_list("paths", paths.to_vec()),
-        ],
-    )
-}
-
-/// Creates the resolved vsearch JSON-RPC request contract.
-pub fn vsearch_request(query: &str, paths: &[String], top_k: Option<u64>) -> JsonRpcRequest {
+pub fn grep_request(
+    query: &str,
+    paths: &[String],
+    limit: Option<u64>,
+    offset: Option<u64>,
+) -> JsonRpcRequest {
     let mut params = vec![
         param_string("query", query),
         param_string_list("paths", paths.to_vec()),
     ];
-    if let Some(top_k) = top_k {
-        params.push(param_u64("top_k", top_k));
+    if let Some(limit) = limit {
+        params.push(param_u64("limit", limit));
+    }
+    if let Some(offset) = offset {
+        params.push(param_u64("offset", offset));
+    }
+    request("paths/tools/grep", params)
+}
+
+/// Creates the resolved vsearch JSON-RPC request contract.
+pub fn vsearch_request(
+    query: &str,
+    paths: &[String],
+    limit: Option<u64>,
+    offset: Option<u64>,
+) -> JsonRpcRequest {
+    let mut params = vec![
+        param_string("query", query),
+        param_string_list("paths", paths.to_vec()),
+    ];
+    if let Some(limit) = limit {
+        params.push(param_u64("limit", limit));
+    }
+    if let Some(offset) = offset {
+        params.push(param_u64("offset", offset));
     }
     request("paths/tools/vsearch", params)
 }
@@ -612,13 +629,13 @@ mod tests {
         );
     }
 
-    /* REQ-DISKD-CLI-007: Vsearch must call the path-based Drive tool with top_k and normalized paths. */
+    /* REQ-DISKD-CLI-007: Vsearch must call the path-based Drive tool with limit/offset and normalized paths. */
     #[test]
-    fn builds_vsearch_request() {
+    fn builds_vsearch_request_with_pagination() {
         let paths = vec!["/Projects/01PROJECT/docs".to_owned()];
 
         assert_eq!(
-            vsearch_request("contract terms", &paths, Some(7)),
+            vsearch_request("contract terms", &paths, Some(7), Some(14)),
             JsonRpcRequest {
                 jsonrpc: "2.0",
                 method: "paths/tools/vsearch",
@@ -632,8 +649,44 @@ mod tests {
                         value: RpcValue::StringList(paths),
                     },
                     RpcParam {
-                        name: "top_k".to_owned(),
+                        name: "limit".to_owned(),
                         value: RpcValue::U64(7),
+                    },
+                    RpcParam {
+                        name: "offset".to_owned(),
+                        value: RpcValue::U64(14),
+                    },
+                ],
+            }
+        );
+    }
+
+    /* REQ-DISKD-CLI-026: Grep must pass limit and offset through the path-based Drive search contract. */
+    #[test]
+    fn builds_grep_request_with_pagination() {
+        let paths = vec!["/Projects/01PROJECT/docs".to_owned()];
+
+        assert_eq!(
+            grep_request("contract terms", &paths, Some(5), Some(10)),
+            JsonRpcRequest {
+                jsonrpc: "2.0",
+                method: "paths/tools/grep",
+                params: vec![
+                    RpcParam {
+                        name: "query".to_owned(),
+                        value: RpcValue::String("contract terms".to_owned()),
+                    },
+                    RpcParam {
+                        name: "paths".to_owned(),
+                        value: RpcValue::StringList(paths),
+                    },
+                    RpcParam {
+                        name: "limit".to_owned(),
+                        value: RpcValue::U64(5),
+                    },
+                    RpcParam {
+                        name: "offset".to_owned(),
+                        value: RpcValue::U64(10),
                     },
                 ],
             }

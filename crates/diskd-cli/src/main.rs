@@ -98,6 +98,10 @@ enum Command {
         query: String,
         paths: Vec<String>,
         #[arg(long)]
+        limit: Option<u64>,
+        #[arg(long)]
+        offset: Option<u64>,
+        #[arg(long)]
         ignore_case: bool,
         #[arg(long)]
         files_with_matches: bool,
@@ -105,8 +109,10 @@ enum Command {
     Vsearch {
         query: String,
         paths: Vec<String>,
-        #[arg(long, alias = "limit")]
-        top: Option<u64>,
+        #[arg(long, alias = "top")]
+        limit: Option<u64>,
+        #[arg(long)]
+        offset: Option<u64>,
     },
     Cat {
         path: String,
@@ -115,9 +121,9 @@ enum Command {
     },
     Read {
         path: String,
-        #[arg(long)]
+        #[arg(long, alias = "limit")]
         parts_limit: Option<u64>,
-        #[arg(long)]
+        #[arg(long, alias = "offset")]
         parts_offset: Option<u64>,
     },
     Stat {
@@ -343,18 +349,25 @@ fn run_drive_command(cli: &Cli, state: &RuntimeState) -> Result<()> {
         Command::Grep {
             query,
             paths,
+            limit,
+            offset,
             ignore_case,
             files_with_matches,
         } => {
             reject_unsupported_flag(*ignore_case, "--ignore-case")?;
             reject_unsupported_flag(*files_with_matches, "--files-with-matches")?;
             let paths = normalize_many_paths(&context, paths)?;
-            let result = client.call_drive(&grep_request(query, &paths))?;
+            let result = client.call_drive(&grep_request(query, &paths, *limit, *offset))?;
             render_value(&result, cli.json)
         }
-        Command::Vsearch { query, paths, top } => {
+        Command::Vsearch {
+            query,
+            paths,
+            limit,
+            offset,
+        } => {
             let paths = normalize_many_paths(&context, paths)?;
-            let result = client.call_drive(&vsearch_request(query, &paths, *top))?;
+            let result = client.call_drive(&vsearch_request(query, &paths, *limit, *offset))?;
             render_value(&result, cli.json)
         }
         Command::Cat { path, version } => {
@@ -1657,11 +1670,11 @@ fn mcp_tool_request(
         }
         "tools__read" => {
             let path = normalize_drive_path(context, Some(&read_string_field(arguments, "path")?))?;
-            Ok(read_file_request(
-                path.as_str(),
-                read_optional_u64(arguments, "parts_limit"),
-                read_optional_u64(arguments, "parts_offset"),
-            ))
+            let limit = read_optional_u64(arguments, "parts_limit")
+                .or_else(|| read_optional_u64(arguments, "limit"));
+            let offset = read_optional_u64(arguments, "parts_offset")
+                .or_else(|| read_optional_u64(arguments, "offset"));
+            Ok(read_file_request(path.as_str(), limit, offset))
         }
         "tools__glob" => {
             let pattern = read_string_field(arguments, "pattern")?;
@@ -1675,17 +1688,21 @@ fn mcp_tool_request(
             Ok(grep_request(
                 &query,
                 &normalize_many_paths(context, &paths)?,
+                read_optional_u64(arguments, "limit"),
+                read_optional_u64(arguments, "offset"),
             ))
         }
         "tools__vsearch" => {
             let query = read_string_field(arguments, "query")?;
             let paths = read_string_array(arguments, "paths")?;
             let limit = read_optional_u64(arguments, "limit")
+                .or_else(|| read_optional_u64(arguments, "top"))
                 .or_else(|| read_optional_u64(arguments, "top_k"));
             Ok(vsearch_request(
                 &query,
                 &normalize_many_paths(context, &paths)?,
                 limit,
+                read_optional_u64(arguments, "offset"),
             ))
         }
         "tools__bi_query" => {
@@ -1722,7 +1739,9 @@ fn mcp_tools() -> Vec<Value> {
                 "properties": {
                     "path": { "type": "string" },
                     "parts_limit": { "type": "integer" },
-                    "parts_offset": { "type": "integer" }
+                    "parts_offset": { "type": "integer" },
+                    "limit": { "type": "integer" },
+                    "offset": { "type": "integer" }
                 },
                 "required": ["path"]
             }
@@ -1746,7 +1765,9 @@ fn mcp_tools() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "query": { "type": "string" },
-                    "paths": { "type": "array", "items": { "type": "string" } }
+                    "paths": { "type": "array", "items": { "type": "string" } },
+                    "limit": { "type": "integer" },
+                    "offset": { "type": "integer" }
                 },
                 "required": ["query", "paths"]
             }
@@ -1759,7 +1780,8 @@ fn mcp_tools() -> Vec<Value> {
                 "properties": {
                     "query": { "type": "string" },
                     "paths": { "type": "array", "items": { "type": "string" } },
-                    "limit": { "type": "integer" }
+                    "limit": { "type": "integer" },
+                    "offset": { "type": "integer" }
                 },
                 "required": ["query", "paths"]
             }
