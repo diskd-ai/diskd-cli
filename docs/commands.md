@@ -31,6 +31,7 @@ Global flags must be placed before the subcommand.
 | `read` | `<path>` | `--limit`/`--parts-limit`, `--offset`/`--parts-offset` | `paths/tools/read` | Structured parts plus pagination metadata. |
 | `stat` | `<path>` | none | `paths/tools/inode-ls` | Path metadata. |
 | `biquery` | `<question> [paths...]` | none | `paths/tools/bi-query` | Natural-language spreadsheet question, not SQL. |
+| `telegram-db` | subcommand-specific | `create`, `insert`, `query`, `commit`, `metadata`, `drop` flags | `drive/telegram/*` | Telegram SQLite DB working API; `query` uses SQL against the named DB. |
 | `upload` | `<local...>` | `--dest <dir>`, `--recursive`, `--force` | upload start, PUT, commit | Uploads files/folders. |
 | `mkdir` | `<path>` | none | `drive/paths/create` | Creates folder. |
 | `rm` | `<path>` | `--recursive` | `drive/paths/delete` | Deletes file/folder. |
@@ -250,6 +251,37 @@ diskd --json biquery "total amount grouped by name" docs/table.csv
 
 Calls `paths/tools/bi-query` for indexed CSV, TSV, XLS, and XLSX files. The
 query is a natural-language question; Drive generates and runs the SQL.
+
+### `telegram-db`
+
+```sh
+diskd --json telegram-db create team-chat \
+  --schema '{"items":["CREATE TABLE messages (id INTEGER PRIMARY KEY, text TEXT)"]}'
+diskd --json telegram-db insert team-chat messages --rows '[{"id":1,"text":"hello"}]'
+diskd --json telegram-db query team-chat "SELECT id, text FROM messages LIMIT 20"
+diskd --json telegram-db query team-chat "SELECT id FROM messages WHERE text = ?" --parameters '["hello"]'
+diskd --json telegram-db commit team-chat
+diskd --json telegram-db metadata team-chat
+diskd --json telegram-db drop team-chat
+```
+
+Drive methods:
+
+```text
+create   -> drive/telegram/create
+insert   -> drive/telegram/insert
+query    -> drive/telegram/query
+commit   -> drive/telegram/commit
+metadata -> drive/telegram/metadata
+drop     -> drive/telegram/drop
+```
+
+Telegram DB names may be provided with or without `.telegram`; the Drive
+handler appends the extension. `create --schema`/`--schema-file` must be a JSON
+object with an `items` array of SQL statements. `insert --rows`/`--rows-file`
+must be a JSON array of row objects.
+`query --parameters`/`--parameters-file` must be a JSON array for positional SQL
+parameters.
 
 ## Write and Manage Commands
 

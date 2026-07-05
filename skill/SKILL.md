@@ -1,6 +1,6 @@
 ---
 name: diskd-cli
-description: diskd CLI (`diskd`) usage for the diskd Drive API through the public apis-service gateway. Use when listing, reading, searching, uploading, syncing, copying, moving, or deleting Drive files from the command line; running exact/BM25 search (`grep`), semantic search (`vsearch`), or natural-language (plain-English) questions over indexed CSV/TSV/XLS/XLSX spreadsheets where the Drive backend generates the SQL (`biquery`); managing auth (`login`/`logout`/`whoami`), project context (`set-context`/`get-context`), self-update (`update`), JSON output for scripts (`--json`), or the embedded MCP stdio server (`diskd mcp serve`). Triggers on mentions of diskd, diskd CLI, `diskd ls/cat/read/grep/vsearch/biquery/upload/sync`, the diskd drive, or adding diskd as an MCP server to an agent.
+description: diskd CLI (`diskd`) usage for the diskd Drive API through the public apis-service gateway. Use when listing, reading, searching, uploading, syncing, copying, moving, or deleting Drive files from the command line; running exact/BM25 search (`grep`), semantic search (`vsearch`), or natural-language (plain-English) questions over indexed CSV/TSV/XLS/XLSX spreadsheets where the Drive backend generates the SQL (`biquery`); creating, inserting, querying, committing, inspecting, or dropping Telegram Drive DBs (`telegram-db`); managing auth (`login`/`logout`/`whoami`), project context (`set-context`/`get-context`), self-update (`update`), JSON output for scripts (`--json`), or the embedded MCP stdio server (`diskd mcp serve`). Triggers on mentions of diskd, diskd CLI, `diskd ls/cat/read/grep/vsearch/biquery/telegram-db/upload/sync`, the diskd drive, or adding diskd as an MCP server to an agent.
 ---
 
 # diskd CLI
@@ -84,6 +84,7 @@ diskd --json vsearch "contract renewal clauses" docs/report.pdf --top 5
 | `read <path>` | Structured indexed document parts. Flags: `--limit`/`--offset` aliases for `--parts-limit`/`--parts-offset`. |
 | `stat <path>` | Path metadata. |
 | `biquery <question> [paths...]` | Natural-language query over indexed CSV/TSV/XLS/XLSX/mailbox spreadsheets; the backend converts the question to SQL and runs it. |
+| `telegram-db <subcommand>` | Telegram Drive DB lifecycle. Subcommands: `create`, `insert`, `query`, `commit`, `metadata`, `drop`. |
 | `upload <local...>` | Upload file(s)/folder(s). Flags: `--dest <dir>`, `--recursive`, `--force`. |
 | `mkdir <path>` | Create a folder. |
 | `rm <path>` | Delete. Flag: `--recursive`. |
@@ -136,6 +137,10 @@ Drive API field. See [references/auth-and-config.md](references/auth-and-config.
   `diskd --json biquery "total amount grouped by name" data/table.csv`. Point it
   at indexed spreadsheet files (`.csv`, `.tsv`, `.xls`, `.xlsx`, `.mailbox`); a
   directory path is expanded to the spreadsheet files inside.
+- **`telegram-db query` is the SQL path.** It calls `drive/telegram/query`
+  against a named Telegram SQLite DB. Use `--parameters '[...]'` for positional
+  SQL parameters. `telegram-db insert` requires a JSON array through `--rows` or
+  `--rows-file`.
 - **`upload` preserves paths relative to each provided local directory** and
   computes SHA-256 per file (start -> PUT bytes -> commit).
 

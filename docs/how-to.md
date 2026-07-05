@@ -89,6 +89,37 @@ diskd --json biquery "what is the total amount?" data/table.csv
 diskd --json biquery "which name has the highest amount?" data/table.csv
 ```
 
+## Work with a Telegram Drive DB
+
+Create a Telegram DB:
+
+```sh
+diskd --json telegram-db create team-chat \
+  --schema '{"items":["CREATE TABLE messages (id INTEGER PRIMARY KEY, text TEXT)"]}'
+```
+
+Insert rows:
+
+```sh
+diskd --json telegram-db insert team-chat messages \
+  --rows '[{"id":1,"text":"hello"}]'
+```
+
+Run a SQL query against the named Telegram DB:
+
+```sh
+diskd --json telegram-db query team-chat \
+  "SELECT id, text FROM messages WHERE text = ?" \
+  --parameters '["hello"]'
+```
+
+Commit pending changes and inspect metadata:
+
+```sh
+diskd --json telegram-db commit team-chat
+diskd --json telegram-db metadata team-chat
+```
+
 ## Use JSON Output in Scripts
 
 Put `--json` before the command:

@@ -15,6 +15,7 @@ macOS, and Windows.
 - Stream file bytes with `cat`.
 - Search indexed content with `grep` and `vsearch`.
 - Ask natural-language questions over CSV, TSV, XLS, and XLSX files with `biquery`.
+- Create, insert, query, commit, inspect, and drop Telegram Drive DBs with `telegram-db`.
 - Upload files, create folders, rename, copy, remove, and one-way sync folders.
 - Run an embedded MCP stdio server with Drive tools for MCP clients.
 - Update itself from signed GitHub release checksums.
@@ -125,6 +126,7 @@ diskd cat path/to/file > local-file
 diskd read path/to/file --limit 3 --offset 0
 diskd stat path/to/file
 diskd biquery "what is the total amount?" sheet.csv
+diskd --json telegram-db query team-chat "SELECT id, text FROM messages LIMIT 20"
 diskd upload ./file.txt --dest docs --force
 diskd sync ./local-folder --dest docs --once
 diskd update

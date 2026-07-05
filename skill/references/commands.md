@@ -5,7 +5,7 @@ Complete flag-by-flag reference. Global flags always precede the subcommand.
 ## Contents
 
 - [Global flags](#global-flags)
-- [Read and query](#read-and-query): `ls`, `glob`, `grep`, `vsearch`, `cat`, `read`, `stat`, `biquery`
+- [Read and query](#read-and-query): `ls`, `glob`, `grep`, `vsearch`, `cat`, `read`, `stat`, `biquery`, `telegram-db`
 - [Write and manage](#write-and-manage): `upload`, `mkdir`, `rm`, `mv`, `cp`, `sync`
 - [Auth and meta](#auth-and-meta): `login`, `logout`, `whoami`, `version`, `update`
 - [Project context](#project-context): `set-context`, `get-context`
@@ -39,6 +39,12 @@ the subcommand, and put command flags after the subcommand.
 | `read` | `<path>` | `--limit <n>`/`--parts-limit <n>`, `--offset <n>`/`--parts-offset <n>` | `paths/tools/read` with `path`, optional `parts_limit`, `parts_offset` | Returns structured parts plus `total_parts`, `next_offset`, `eof`. |
 | `stat` | `<path>` | none | `paths/tools/inode-ls` | Returns path metadata. |
 | `biquery` | `<question> [paths...]` | none | `paths/tools/bi-query` with natural-language `query`, normalized `paths` | Question is not SQL. Use for indexed `.csv`, `.tsv`, `.xls`, `.xlsx`, `.mailbox`. |
+| `telegram-db create` | `<name>` | `--schema <json>`, `--schema-file <path>`, `--recreate`, `--directory <dir>` | `drive/telegram/create` | Creates a Telegram DB; handler appends `.telegram` when needed. |
+| `telegram-db insert` | `<name> <table>` | `--rows <json-array>` or `--rows-file <path>` | `drive/telegram/insert` | Inserts row objects into a Telegram DB table. |
+| `telegram-db query` | `<name> <sql>` | `--parameters <json-array>` or `--parameters-file <path>` | `drive/telegram/query` | Runs SQL against the named Telegram DB. |
+| `telegram-db commit` | `<name>` | none | `drive/telegram/commit` | Commits pending DB changes. |
+| `telegram-db metadata` | `<name>` | none | `drive/telegram/metadata` | Returns Telegram DB metadata. |
+| `telegram-db drop` | `<name>` | none | `drive/telegram/drop` | Deletes the Telegram DB. |
 | `upload` | `<local...>` one or more files/folders | `--dest <dir>`, `--recursive`, `--force` | `drive/upload/start`, PUT upload URL, `drive/upload/commit` per file | Uploads local files into Drive; `--force` overwrites. |
 | `mkdir` | `<path>` | none | `drive/paths/create` | Creates a Drive folder. |
 | `rm` | `<path>` | `--recursive` | `drive/paths/delete` | Deletes a file or folder. |
@@ -144,6 +150,37 @@ Point `paths` at indexed spreadsheet files (`.csv`, `.tsv`, `.xls`, `.xlsx`,
 `.mailbox`). Directory paths are expanded to the spreadsheet files inside them;
 non-spreadsheet files are ignored, and an all-non-spreadsheet path set returns a
 `NO_EXCEL_FILES` error.
+
+### `telegram-db`
+
+```sh
+diskd --json telegram-db create team-chat \
+  --schema '{"items":["CREATE TABLE messages (id INTEGER PRIMARY KEY, text TEXT)"]}'
+diskd --json telegram-db insert team-chat messages --rows '[{"id":1,"text":"hello"}]'
+diskd --json telegram-db query team-chat "SELECT id, text FROM messages LIMIT 20"
+diskd --json telegram-db query team-chat "SELECT id FROM messages WHERE text = ?" --parameters '["hello"]'
+diskd --json telegram-db commit team-chat
+diskd --json telegram-db metadata team-chat
+diskd --json telegram-db drop team-chat
+```
+
+This is the Telegram SQLite DB working API. It calls the dedicated Drive
+Telegram JSON-RPC namespace:
+
+```text
+create   -> drive/telegram/create
+insert   -> drive/telegram/insert
+query    -> drive/telegram/query
+commit   -> drive/telegram/commit
+metadata -> drive/telegram/metadata
+drop     -> drive/telegram/drop
+```
+
+JSON argument rules:
+
+- `create --schema`/`--schema-file` must be a JSON object with an `items` array of SQL statements.
+- `insert --rows`/`--rows-file` must be a JSON array of row objects.
+- `query --parameters`/`--parameters-file` must be a JSON array.
 
 ## Write and manage
 

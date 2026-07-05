@@ -13,7 +13,9 @@ use clap::{Parser, Subcommand};
 use diskd_client::{
     biquery_request, decode_upload_start, download_url_request, glob_request, grep_request,
     ls_request, metadata_request, path_create_request, path_delete_request, path_rename_request,
-    read_file_request, request_client_credentials_token, upload_commit_request,
+    read_file_request, request_client_credentials_token, telegram_db_commit_request,
+    telegram_db_create_request, telegram_db_drop_request, telegram_db_insert_request,
+    telegram_db_metadata_request, telegram_db_query_request, upload_commit_request,
     upload_start_request, vsearch_request, ClientCredentialsTokenParams, GatewayClient,
     JsonRpcRequest,
 };
@@ -133,6 +135,10 @@ enum Command {
         query: String,
         paths: Vec<String>,
     },
+    TelegramDb {
+        #[command(subcommand)]
+        command: TelegramDbCommand,
+    },
     Upload {
         local: Vec<PathBuf>,
         #[arg(long)]
@@ -207,6 +213,47 @@ enum Command {
 #[derive(Debug, Subcommand)]
 enum McpCommand {
     Serve,
+}
+
+/// Groups Telegram Drive DB operations under one command namespace.
+#[derive(Debug, Subcommand)]
+enum TelegramDbCommand {
+    Create {
+        name: String,
+        #[arg(long = "schema", alias = "schema-json")]
+        schema_json: Option<String>,
+        #[arg(long)]
+        schema_file: Option<PathBuf>,
+        #[arg(long)]
+        recreate: bool,
+        #[arg(long)]
+        directory: Option<String>,
+    },
+    Insert {
+        name: String,
+        table: String,
+        #[arg(long = "rows", alias = "rows-json")]
+        rows_json: Option<String>,
+        #[arg(long)]
+        rows_file: Option<PathBuf>,
+    },
+    Query {
+        name: String,
+        sql: String,
+        #[arg(long = "parameters", alias = "params-json")]
+        parameters_json: Option<String>,
+        #[arg(long, alias = "params-file")]
+        parameters_file: Option<PathBuf>,
+    },
+    Commit {
+        name: String,
+    },
+    Metadata {
+        name: String,
+    },
+    Drop {
+        name: String,
+    },
 }
 
 /// Carries resolved diskd paths and non-secret config loaded at process start.
@@ -401,6 +448,7 @@ fn run_drive_command(cli: &Cli, state: &RuntimeState) -> Result<()> {
             let result = client.call_drive(&biquery_request(query, &paths))?;
             render_value(&result, cli.json)
         }
+        Command::TelegramDb { command } => run_telegram_db_command(command, &mut client, cli),
         Command::Upload {
             local,
             dest,
@@ -458,6 +506,63 @@ fn run_drive_command(cli: &Cli, state: &RuntimeState) -> Result<()> {
         ),
         _ => bail!("command is not a Drive command"),
     }
+}
+
+/// Dispatches Telegram Drive DB commands to the source-backed JSON-RPC methods.
+fn run_telegram_db_command(
+    command: &TelegramDbCommand,
+    client: &mut GatewayClient,
+    cli: &Cli,
+) -> Result<()> {
+    let request = match command {
+        TelegramDbCommand::Create {
+            name,
+            schema_json,
+            schema_file,
+            recreate,
+            directory,
+        } => {
+            let schema = parse_optional_json_arg("schema", schema_json.as_deref(), schema_file)?
+                .map(|value| expect_json_object("schema", value))
+                .transpose()?;
+            telegram_db_create_request(
+                name,
+                schema,
+                None,
+                flag_opt(*recreate),
+                directory.as_deref(),
+            )
+        }
+        TelegramDbCommand::Insert {
+            name,
+            table,
+            rows_json,
+            rows_file,
+        } => {
+            let rows = expect_json_array(
+                "rows",
+                parse_required_json_arg("rows", rows_json.as_deref(), rows_file)?,
+            )?;
+            telegram_db_insert_request(name, table, rows)
+        }
+        TelegramDbCommand::Query {
+            name,
+            sql,
+            parameters_json,
+            parameters_file,
+        } => {
+            let parameters =
+                parse_optional_json_arg("parameters", parameters_json.as_deref(), parameters_file)?
+                    .map(|value| expect_json_array("parameters", value))
+                    .transpose()?;
+            telegram_db_query_request(name, sql, parameters)
+        }
+        TelegramDbCommand::Commit { name } => telegram_db_commit_request(name),
+        TelegramDbCommand::Metadata { name } => telegram_db_metadata_request(name),
+        TelegramDbCommand::Drop { name } => telegram_db_drop_request(name),
+    };
+    let result = client.call_drive(&request)?;
+    render_value(&result, cli.json)
 }
 
 /// Logs in with a raw token, keyfile, or browser-created diskd CLI credentials.
@@ -1944,6 +2049,62 @@ fn reject_unsupported_flag(enabled: bool, name: &str) -> Result<()> {
         bail!("{name} is not supported by the current Drive grep contract")
     }
     Ok(())
+}
+
+/// Parses an optional JSON value supplied inline or through a file flag.
+fn parse_optional_json_arg(
+    label: &'static str,
+    inline: Option<&str>,
+    file: &Option<PathBuf>,
+) -> Result<Option<Value>> {
+    if inline.is_some() && file.is_some() {
+        bail!("use either --{label} or --{label}-file, not both");
+    }
+    if let Some(document) = inline {
+        return Ok(Some(parse_json_document(label, document)?));
+    }
+    if let Some(path) = file {
+        let document = fs::read_to_string(path)
+            .with_context(|| format!("failed to read {label} JSON from {}", path.display()))?;
+        return Ok(Some(parse_json_document(label, &document)?));
+    }
+    Ok(None)
+}
+
+/// Parses a required JSON value supplied inline or through a file flag.
+fn parse_required_json_arg(
+    label: &'static str,
+    inline: Option<&str>,
+    file: &Option<PathBuf>,
+) -> Result<Value> {
+    parse_optional_json_arg(label, inline, file)?
+        .with_context(|| format!("telegram-db {label} requires --{label} or --{label}-file"))
+}
+
+/// Converts a raw JSON document into a serde value with contextual errors.
+fn parse_json_document(label: &'static str, document: &str) -> Result<Value> {
+    if document.trim().is_empty() {
+        bail!("{label} JSON must not be empty");
+    }
+    serde_json::from_str(document).with_context(|| format!("{label} must be valid JSON"))
+}
+
+/// Validates that a JSON command argument is an object before sending it.
+fn expect_json_object(label: &'static str, value: Value) -> Result<Value> {
+    if value.is_object() {
+        Ok(value)
+    } else {
+        bail!("{label} must be a JSON object")
+    }
+}
+
+/// Validates that a JSON command argument is an array before sending it.
+fn expect_json_array(label: &'static str, value: Value) -> Result<Value> {
+    if value.is_array() {
+        Ok(value)
+    } else {
+        bail!("{label} must be a JSON array")
+    }
 }
 
 /// Renders a Drive value as JSON or compact text.

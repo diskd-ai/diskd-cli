@@ -422,3 +422,131 @@ fn search_commands_pass_limit_and_offset() {
     assert!(grep.status.success(), "{}", stderr_text(&grep));
     assert!(vsearch.status.success(), "{}", stderr_text(&vsearch));
 }
+
+/* REQ-DISKD-CLI-029: telegram-db must expose the Drive Telegram DB JSON-RPC API for create, insert, and query workflows. */
+#[test]
+fn telegram_db_commands_call_drive_telegram_api() {
+    let home = TempDir::new().unwrap();
+    let rows_file = write_fixture_file(&home, "rows.json", br#"[{"id":1,"text":"hello"}]"#);
+    let gateway = start_gateway(3, |index, mut request| {
+        assert_eq!(request.method().as_str(), "POST");
+        assert_eq!(request.url(), "/v1/os/drive/api/v1");
+        assert_eq!(
+            request_header(&request, "Authorization"),
+            "Bearer token-test"
+        );
+        let body = request_json(&mut request);
+        match index {
+            0 => {
+                assert_eq!(body["method"], "drive/telegram/create");
+                assert_eq!(body["params"]["name"], "team-chat");
+                assert_eq!(
+                    body["params"]["schema"]["items"][0],
+                    "CREATE TABLE messages (id INTEGER PRIMARY KEY, text TEXT)"
+                );
+                assert_eq!(body["params"]["recreate"], true);
+                respond_json(
+                    request,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "result": {
+                            "db_inode": "db-inode-1",
+                            "file_id": "file-1",
+                            "name": "team-chat.telegram",
+                            "status": "ready"
+                        }
+                    }),
+                );
+            }
+            1 => {
+                assert_eq!(body["method"], "drive/telegram/insert");
+                assert_eq!(body["params"]["name"], "team-chat");
+                assert_eq!(body["params"]["table"], "messages");
+                assert_eq!(
+                    body["params"]["rows"],
+                    json!([{ "id": 1, "text": "hello" }])
+                );
+                respond_json(
+                    request,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "result": {
+                            "inserted": 1,
+                            "pending_rows": 1,
+                            "status": "pending"
+                        }
+                    }),
+                );
+            }
+            2 => {
+                assert_eq!(body["method"], "drive/telegram/query");
+                assert_eq!(body["params"]["name"], "team-chat");
+                assert_eq!(
+                    body["params"]["sql"],
+                    "SELECT id, text FROM messages WHERE text = ?"
+                );
+                assert_eq!(body["params"]["parameters"], json!(["hello"]));
+                respond_json(
+                    request,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "result": {
+                            "rows": [{ "id": 1, "text": "hello" }]
+                        }
+                    }),
+                );
+            }
+            _ => unreachable!(),
+        }
+    });
+
+    let create = run_diskd(
+        &home,
+        &gateway.base_url,
+        &[
+            "--json",
+            "telegram-db",
+            "create",
+            "team-chat",
+            "--schema",
+            r#"{"items":["CREATE TABLE messages (id INTEGER PRIMARY KEY, text TEXT)"]}"#,
+            "--recreate",
+        ],
+    );
+    let insert = run_diskd(
+        &home,
+        &gateway.base_url,
+        &[
+            "--json",
+            "telegram-db",
+            "insert",
+            "team-chat",
+            "messages",
+            "--rows-file",
+            rows_file.to_str().unwrap(),
+        ],
+    );
+    let query = run_diskd(
+        &home,
+        &gateway.base_url,
+        &[
+            "--json",
+            "telegram-db",
+            "query",
+            "team-chat",
+            "SELECT id, text FROM messages WHERE text = ?",
+            "--parameters",
+            r#"["hello"]"#,
+        ],
+    );
+
+    gateway.join();
+    assert!(create.status.success(), "{}", stderr_text(&create));
+    assert!(insert.status.success(), "{}", stderr_text(&insert));
+    assert!(query.status.success(), "{}", stderr_text(&query));
+    let printed: Value = serde_json::from_str(&stdout_text(&query)).unwrap();
+    assert_eq!(printed["rows"][0]["text"], "hello");
+}

@@ -146,3 +146,12 @@ diskd --json biquery "total amount grouped by name" notes/table.csv
 
 `biquery` takes a natural-language question. Drive reads the spreadsheet schema,
 generates SQL internally, and returns the result table.
+
+## 8. Query a Telegram Drive DB
+
+```sh
+diskd --json telegram-db query team-chat "SELECT id, text FROM messages LIMIT 20"
+```
+
+Use `telegram-db create`, `insert`, `commit`, `metadata`, and `drop` for the
+rest of the Telegram SQLite DB lifecycle.

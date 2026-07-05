@@ -6,23 +6,24 @@ use serde_json::{json, Map, Value};
 use thiserror::Error;
 
 /// Captures JSON values needed by the first Drive JSON-RPC contract slice.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RpcValue {
     String(String),
     U64(u64),
     Bool(bool),
     StringList(Vec<String>),
+    Json(Value),
 }
 
 /// Keeps JSON-RPC params ordered and typed so tests can verify exact wire intent.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RpcParam {
     pub name: String,
     pub value: RpcValue,
 }
 
 /// Describes a Drive JSON-RPC request before transport serializes it to JSON.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct JsonRpcRequest {
     pub jsonrpc: &'static str,
     pub method: &'static str,
@@ -301,6 +302,70 @@ pub fn biquery_request(query: &str, paths: &[String]) -> JsonRpcRequest {
     )
 }
 
+/// Creates a Telegram Drive DB database with optional schema and placement flags.
+pub fn telegram_db_create_request(
+    name: &str,
+    schema: Option<Value>,
+    check_exists: Option<bool>,
+    recreate: Option<bool>,
+    directory: Option<&str>,
+) -> JsonRpcRequest {
+    let mut params = vec![param_string("name", name)];
+    if let Some(schema) = schema {
+        params.push(param_json("schema", schema));
+    }
+    if let Some(check_exists) = check_exists {
+        params.push(param_bool("check_exists", check_exists));
+    }
+    if let Some(recreate) = recreate {
+        params.push(param_bool("recreate", recreate));
+    }
+    if let Some(directory) = directory {
+        params.push(param_string("directory", directory));
+    }
+    request("drive/telegram/create", params)
+}
+
+/// Creates a Telegram Drive DB insert request with row objects supplied as JSON.
+pub fn telegram_db_insert_request(name: &str, table: &str, rows: Value) -> JsonRpcRequest {
+    request(
+        "drive/telegram/insert",
+        vec![
+            param_string("name", name),
+            param_string("table", table),
+            param_json("rows", rows),
+        ],
+    )
+}
+
+/// Creates a Telegram Drive DB SQL query request with optional positional parameters.
+pub fn telegram_db_query_request(
+    name: &str,
+    sql: &str,
+    parameters: Option<Value>,
+) -> JsonRpcRequest {
+    let mut params = vec![param_string("name", name), param_string("sql", sql)];
+    if let Some(parameters) = parameters {
+        params.push(param_json("parameters", parameters));
+    }
+    request("drive/telegram/query", params)
+}
+
+/// Creates a Telegram Drive DB commit request for pending row changes.
+pub fn telegram_db_commit_request(name: &str) -> JsonRpcRequest {
+    request("drive/telegram/commit", vec![param_string("name", name)])
+}
+
+/// Creates a Telegram Drive DB metadata request.
+pub fn telegram_db_metadata_request(name: &str) -> JsonRpcRequest {
+    request("drive/telegram/metadata", vec![param_string("name", name)])
+}
+
+/// Creates a Telegram Drive DB drop request.
+pub fn telegram_db_drop_request(name: &str) -> JsonRpcRequest {
+    request("drive/telegram/drop", vec![param_string("name", name)])
+}
+
 /// Creates the file metadata request used by diskd stat.
 pub fn metadata_request(path: &str) -> JsonRpcRequest {
     request("paths/tools/inode-ls", vec![param_string("path", path)])
@@ -457,6 +522,13 @@ fn param_bool(name: &str, value: bool) -> RpcParam {
     }
 }
 
+fn param_json(name: &str, value: Value) -> RpcParam {
+    RpcParam {
+        name: name.to_owned(),
+        value: RpcValue::Json(value),
+    }
+}
+
 fn rpc_params_json(params: &[RpcParam]) -> Value {
     let mut map = Map::new();
     for param in params {
@@ -471,6 +543,7 @@ fn rpc_value_json(value: &RpcValue) -> Value {
         RpcValue::U64(value) => json!(value),
         RpcValue::Bool(value) => json!(value),
         RpcValue::StringList(value) => json!(value),
+        RpcValue::Json(value) => value.clone(),
     }
 }
 
@@ -712,6 +785,105 @@ mod tests {
                     value: RpcValue::StringList(vec!["/Projects/01PROJECT/sheet.xlsx".to_owned()]),
                 },
             ]
+        );
+    }
+
+    /* REQ-DISKD-CLI-029: Telegram DB commands must use the dedicated Drive Telegram JSON-RPC namespace, not spreadsheet BI tools. */
+    #[test]
+    fn builds_telegram_db_requests() {
+        let schema = json!({
+            "items": ["CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, text TEXT)"]
+        });
+        let rows = json!([{ "id": 1, "text": "hello" }]);
+        let parameters = json!(["hello"]);
+
+        assert_eq!(
+            telegram_db_create_request(
+                "team-chat",
+                Some(schema.clone()),
+                None,
+                Some(true),
+                Some("/Telegram")
+            ),
+            JsonRpcRequest {
+                jsonrpc: "2.0",
+                method: "drive/telegram/create",
+                params: vec![
+                    RpcParam {
+                        name: "name".to_owned(),
+                        value: RpcValue::String("team-chat".to_owned()),
+                    },
+                    RpcParam {
+                        name: "schema".to_owned(),
+                        value: RpcValue::Json(schema),
+                    },
+                    RpcParam {
+                        name: "recreate".to_owned(),
+                        value: RpcValue::Bool(true),
+                    },
+                    RpcParam {
+                        name: "directory".to_owned(),
+                        value: RpcValue::String("/Telegram".to_owned()),
+                    },
+                ],
+            }
+        );
+
+        assert_eq!(
+            telegram_db_insert_request("team-chat", "messages", rows.clone()).params,
+            vec![
+                RpcParam {
+                    name: "name".to_owned(),
+                    value: RpcValue::String("team-chat".to_owned()),
+                },
+                RpcParam {
+                    name: "table".to_owned(),
+                    value: RpcValue::String("messages".to_owned()),
+                },
+                RpcParam {
+                    name: "rows".to_owned(),
+                    value: RpcValue::Json(rows),
+                },
+            ]
+        );
+
+        assert_eq!(
+            telegram_db_query_request(
+                "team-chat",
+                "SELECT * FROM messages WHERE text = ?",
+                Some(parameters.clone())
+            ),
+            JsonRpcRequest {
+                jsonrpc: "2.0",
+                method: "drive/telegram/query",
+                params: vec![
+                    RpcParam {
+                        name: "name".to_owned(),
+                        value: RpcValue::String("team-chat".to_owned()),
+                    },
+                    RpcParam {
+                        name: "sql".to_owned(),
+                        value: RpcValue::String("SELECT * FROM messages WHERE text = ?".to_owned()),
+                    },
+                    RpcParam {
+                        name: "parameters".to_owned(),
+                        value: RpcValue::Json(parameters),
+                    },
+                ],
+            }
+        );
+
+        assert_eq!(
+            telegram_db_commit_request("team-chat").method,
+            "drive/telegram/commit"
+        );
+        assert_eq!(
+            telegram_db_metadata_request("team-chat").method,
+            "drive/telegram/metadata"
+        );
+        assert_eq!(
+            telegram_db_drop_request("team-chat").method,
+            "drive/telegram/drop"
         );
     }
 
