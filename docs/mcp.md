@@ -36,7 +36,7 @@ Use stored local credentials:
       "command": "diskd",
       "args": ["mcp", "serve"],
       "env": {
-        "APIS_BASE_URL": "https://apis.diskd.ai"
+        "APIS_BASE_URL": "https://apis.iosya.com"
       }
     }
   }
@@ -58,7 +58,7 @@ Or put a token directly in the agent config:
       "command": "diskd",
       "args": ["mcp", "serve"],
       "env": {
-        "APIS_BASE_URL": "https://apis.diskd.ai",
+        "APIS_BASE_URL": "https://apis.iosya.com",
         "APIS_ACCESS_TOKEN": "..."
       }
     }

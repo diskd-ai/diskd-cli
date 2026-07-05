@@ -137,7 +137,7 @@ launches `diskd mcp serve` over stdio.
 
 ```sh
 export DISKD_HOME="$RUNNER_TEMP/diskd"
-export APIS_BASE_URL="https://apis.diskd.ai"
+export APIS_BASE_URL="https://apis.iosya.com"
 diskd login --token "$APIS_ACCESS_TOKEN"
 diskd --json whoami
 diskd --json upload ./artifact.txt --dest ci --force

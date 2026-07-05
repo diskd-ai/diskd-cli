@@ -29,7 +29,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tar::Archive;
 
-const DEFAULT_BASE_URL: &str = "https://apis.diskd.ai";
+const DEFAULT_BASE_URL: &str = "https://apis.iosya.com";
 const GITHUB_API_BASE_URL: &str = "https://api.github.com";
 const GITHUB_REPOSITORY: &str = "diskd-ai/diskd-cli";
 const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_millis(900);

@@ -31,7 +31,7 @@ curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh 
 Pin a release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh | DISKD_VERSION=v0.1.1 sh
+curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh | DISKD_VERSION=v0.1.2 sh
 ```
 
 Install into a custom directory:
@@ -65,7 +65,7 @@ Or keep a token only in the environment:
 
 ```sh
 export APIS_ACCESS_TOKEN="..."
-export APIS_BASE_URL="https://apis.diskd.ai"
+export APIS_BASE_URL="https://apis.iosya.com"
 ```
 
 Check identity metadata decoded from the token:
@@ -142,7 +142,7 @@ You can override the state directory with `DISKD_HOME`.
 Important environment variables:
 
 ```sh
-export APIS_BASE_URL="https://apis.diskd.ai"
+export APIS_BASE_URL="https://apis.iosya.com"
 export APIS_ACCESS_TOKEN="..."
 export DISKD_HOME="$HOME/.diskd"
 export DISKD_NO_UPDATE_CHECK=1

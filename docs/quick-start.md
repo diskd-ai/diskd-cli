@@ -14,7 +14,7 @@ curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh 
 Pinned release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh | DISKD_VERSION=v0.1.1 sh
+curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh | DISKD_VERSION=v0.1.2 sh
 ```
 
 Confirm the binary:
@@ -40,7 +40,7 @@ diskd update
 For an already-issued bearer token:
 
 ```sh
-export APIS_BASE_URL="https://apis.diskd.ai"
+export APIS_BASE_URL="https://apis.iosya.com"
 diskd login --token "$APIS_ACCESS_TOKEN"
 ```
 
@@ -58,7 +58,7 @@ The credential file format is:
   "clientId": "client-id",
   "clientSecret": "client-secret",
   "audience": "diskd-api",
-  "apisUrl": "https://apis.diskd.ai"
+  "apisUrl": "https://apis.iosya.com"
 }
 ```
 
