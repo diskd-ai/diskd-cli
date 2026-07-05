@@ -11,7 +11,7 @@ macOS, and Windows.
 
 ## What You Can Do
 
-- Browse Drive paths with `ls`, `glob`, and `stat`.
+- Browse Drive paths with `ls`, `tree`, `glob`, and `stat`.
 - Stream file bytes with `cat`.
 - Search indexed content with `grep` and `vsearch`.
 - Ask natural-language questions over CSV, TSV, XLS, and XLSX files with `biquery`.
@@ -119,7 +119,8 @@ diskd --json ls docs
 ## Common Commands
 
 ```sh
-diskd ls [path] [--recursive] [--long]    # <DIR>/<FILE>, size, display name
+diskd ls [path] [--recursive] [--long]    # <DIR>/<FILE>, size, index status, name + display metadata
+diskd tree [path] -L 2 -s                 # recursive Drive tree, depth-limited
 diskd glob "**/*.pdf" [--path docs]
 diskd grep "exact text" [path...] --limit 10 --offset 0
 diskd vsearch "semantic query" [path...] --limit 10 --offset 0

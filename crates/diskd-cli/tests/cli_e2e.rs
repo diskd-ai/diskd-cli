@@ -108,7 +108,7 @@ fn write_fixture_file(home: &TempDir, name: &str, contents: &[u8]) -> PathBuf {
     path
 }
 
-/* REQ-DISKD-CLI-015: ls must call the gateway Drive JSON-RPC endpoint with bearer auth, project-normalized paths, and ls-like text output using display names. */
+/* REQ-DISKD-CLI-015: ls must call the gateway Drive JSON-RPC endpoint with bearer auth, project-normalized paths, and ls-like text output using copyable names, display metadata, and indexing status. */
 #[test]
 fn ls_normalizes_project_path_and_uses_bearer_auth() {
     let gateway = start_gateway(1, |_, mut request| {
@@ -129,7 +129,7 @@ fn ls_normalizes_project_path_and_uses_bearer_auth() {
                 "result": {
                     "entries": [
                         { "name": "reports", "metadata": { "displayName": "Reports" }, "type": "dir", "full_path": "/Projects/01PROJECT/docs/reports", "size": 0 },
-                        { "name": "a.txt", "displayName": "A Document", "type": "file", "full_path": "/Projects/01PROJECT/docs/a.txt", "size": 5 }
+                        { "name": "a.txt", "displayName": "A Document", "type": "file", "full_path": "/Projects/01PROJECT/docs/a.txt", "size": 5, "indexingStatus": "indexed" }
                     ]
                 }
             }),
@@ -147,7 +147,63 @@ fn ls_normalizes_project_path_and_uses_bearer_auth() {
     assert!(output.status.success(), "{}", stderr_text(&output));
     assert_eq!(
         stdout_text(&output),
-        "<DIR>          0 Reports\n<FILE>         5 A Document\n"
+        "<DIR>          0 -              reports (Reports)\n<FILE>         5 indexed        a.txt (A Document)\n"
+    );
+}
+
+/* REQ-DISKD-CLI-033: tree must call recursive Drive ls once and render depth-limited copyable names with display metadata. */
+#[test]
+fn tree_renders_recursive_ls_with_depth_and_sizes() {
+    let gateway = start_gateway(1, |_, mut request| {
+        assert_eq!(request.method().as_str(), "POST");
+        assert_eq!(request.url(), "/v1/os/drive/api/v1");
+        assert_eq!(
+            request_header(&request, "Authorization"),
+            "Bearer token-test"
+        );
+        let body = request_json(&mut request);
+        assert_eq!(body["method"], "paths/tools/ls");
+        assert_eq!(body["params"]["path"], "/Projects/01PROJECT/docs");
+        assert_eq!(body["params"]["recursive"], true);
+        assert_eq!(body["params"]["show_hidden"], true);
+        respond_json(
+            request,
+            json!({
+                "jsonrpc": "2.0",
+                "id": body["id"],
+                "result": {
+                    "entries": [
+                        { "name": "reports", "metadata": { "displayName": "Reports" }, "type": "dir", "full_path": "/Projects/01PROJECT/docs/reports", "size": 0 },
+                        { "name": "q1.pdf", "displayName": "Q1 Report", "type": "file", "full_path": "/Projects/01PROJECT/docs/reports/q1.pdf", "size": 17 },
+                        { "name": "old.txt", "type": "file", "full_path": "/Projects/01PROJECT/docs/reports/archive/old.txt", "size": 1 },
+                        { "name": "a.txt", "displayName": "A Document", "type": "file", "full_path": "/Projects/01PROJECT/docs/a.txt", "size": 5 }
+                    ]
+                }
+            }),
+        );
+    });
+    let home = TempDir::new().unwrap();
+
+    let output = run_diskd(
+        &home,
+        &gateway.base_url,
+        &[
+            "--project",
+            "01PROJECT",
+            "tree",
+            "docs",
+            "-L",
+            "2",
+            "-s",
+            "-a",
+        ],
+    );
+
+    gateway.join();
+    assert!(output.status.success(), "{}", stderr_text(&output));
+    assert_eq!(
+        stdout_text(&output),
+        "docs\n|-- <FILE>        5 a.txt (A Document)\n`-- <DIR>        0 reports (Reports)\n    `-- <FILE>       17 q1.pdf (Q1 Report)\n"
     );
 }
 

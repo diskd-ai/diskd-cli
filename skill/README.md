@@ -12,7 +12,7 @@ interface for Drive files: list, read, search, upload, sync, and query.
 
 This skill provides commands, flags, and end-to-end patterns for `diskd`:
 
-* Browse Drive paths (`ls`, `glob`, `stat`) and stream bytes (`cat`)
+* Browse Drive paths (`ls`, `tree`, `glob`, `stat`) and stream bytes (`cat`)
 * Read structured indexed document parts (`read`)
 * Exact/BM25 search (`grep`) and semantic search (`vsearch`)
 * Natural-language (plain-English) questions over indexed CSV/TSV/XLS/XLSX/mailbox spreadsheets (`biquery`); the Drive backend turns the question into SQL and runs it
@@ -28,7 +28,7 @@ This skill provides commands, flags, and end-to-end patterns for `diskd`:
 **Triggers:**
 
 * Mentions of diskd, the diskd CLI, or the diskd drive
-* Commands like `diskd ls / cat / read / grep / vsearch / biquery / upload / sync`
+* Commands like `diskd ls / tree / cat / read / grep / vsearch / biquery / upload / sync`
 * Uploading files to, or searching/reading files on, the diskd Drive from a shell
 * Asking natural-language questions of CSV or spreadsheet files stored in Drive
 * Adding diskd as an MCP server to an LLM agent

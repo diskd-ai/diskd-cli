@@ -5,7 +5,7 @@ Complete flag-by-flag reference. Global flags always precede the subcommand.
 ## Contents
 
 - [Global flags](#global-flags)
-- [Read and query](#read-and-query): `ls`, `glob`, `grep`, `vsearch`, `cat`, `read`, `stat`, `biquery`, `database`, `telegram-db`
+- [Read and query](#read-and-query): `ls`, `tree`, `glob`, `grep`, `vsearch`, `cat`, `read`, `stat`, `biquery`, `database`, `telegram-db`
 - [Write and manage](#write-and-manage): `upload`, `mkdir`, `rm`, `mv`, `cp`, `sync`
 - [Auth and meta](#auth-and-meta): `login`, `logout`, `whoami`, `version`, `update`
 - [Project context](#project-context): `set-context`, `get-context`
@@ -31,7 +31,8 @@ the subcommand, and put command flags after the subcommand.
 
 | Command | Positional args | Command flags | API/behavior | Output notes |
 | --- | --- | --- | --- | --- |
-| `ls` | `[path]` default context root | `--recursive`, `--long`, `--show-hidden`, `--show-system` | `paths/tools/ls` with `path`, optional booleans | Text is ls-like: type marker (`<DIR>`, `<FILE>`), size, then display name from top-level or metadata fields. `--json` preserves raw entries. |
+| `ls` | `[path]` default context root | `--recursive`, `--long`, `--show-hidden`, `--show-system` | `paths/tools/ls` with `path`, optional booleans | Text is ls-like: type marker (`<DIR>`, `<FILE>`), size, indexing status, then copyable Drive name with display metadata in parentheses. `--json` preserves raw entries. |
+| `tree` | `[path]` default context root | `-L`/`--depth <n>` (`--deep` alias), `-a`/`--all`, `-d`/`--dirs-only`, `-f`/`--full-path`, `-s`/`--size`, `--show-system` | recursive `paths/tools/ls` with `path`, `recursive=true`, optional visibility booleans | ASCII tree over Drive entries. `--json` preserves raw recursive ls response. |
 | `glob` | `<pattern>` | `--path <dir>`, `--show-hidden`, `--show-system` | `paths/tools/glob` with `pattern`, optional `path` | Returns matching path entries. |
 | `grep` | `<query> [paths...]` | `--limit <n>`, `--offset <n>`, unsupported parser-only `--ignore-case`, `--files-with-matches` | `paths/tools/grep` with `query`, normalized `paths`, optional `limit`, `offset` | Exact/BM25 indexed document search. Omitted paths search the context root. |
 | `vsearch` | `<query> [paths...]` | `--limit <n>`, `--top <n>` alias, `--offset <n>` | `paths/tools/vsearch` with `query`, normalized `paths`, optional `limit`, `offset` | Semantic search. Prefer file paths when directory vector search is unreliable. |
@@ -83,13 +84,38 @@ Drive method: `paths/tools/ls`. Path defaults to the context root.
 Human text output is one row per entry:
 
 ```text
-<DIR>          0 Reports
-<FILE>         5 A Document
+<DIR>          0 -              reports (Reports)
+<FILE>         5 indexed        a.txt (A Document)
 ```
 
-The name column prefers `displayName`/`display_name`, then
-`metadata.displayName`/`metadata.display_name`, then the raw Drive name/path.
-Use `diskd --json ls` to keep the backend response unchanged for scripts.
+The indexing column reads `indexingStatus`/`indexing_status`, or `-` when the
+backend omits it. The name column keeps the raw Drive `name` or final path
+segment so it can be copied into the next command. When
+`displayName`/`display_name` or `metadata.displayName`/`metadata.display_name`
+differs, the CLI appends it in parentheses. Use `diskd --json ls` to keep the
+backend response unchanged for scripts.
+
+### `tree`
+
+```sh
+diskd tree [path] [-L depth] [-a] [-d] [-f] [-s] [--show-system]
+```
+
+Drive method: recursive `paths/tools/ls`. Path defaults to the context root.
+
+Useful system-`tree` style flags:
+
+| Flag | Purpose |
+| --- | --- |
+| `-L`, `--depth`, `--deep <n>` | Limit displayed depth below the root path. |
+| `-a`, `--all` | Include hidden Drive entries (`show_hidden=true`). |
+| `-d`, `--dirs-only` | Show directories only. |
+| `-f`, `--full-path` | Show full Drive paths instead of names plus display metadata. |
+| `-s`, `--size` | Show byte size beside each entry. |
+| `--show-system` | Include system entries. |
+
+Use `diskd --json tree` to keep the backend recursive listing unchanged for
+scripts.
 
 ### `glob`
 

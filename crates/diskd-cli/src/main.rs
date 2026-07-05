@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
@@ -87,6 +88,21 @@ enum Command {
         long: bool,
         #[arg(long)]
         show_hidden: bool,
+        #[arg(long)]
+        show_system: bool,
+    },
+    Tree {
+        path: Option<String>,
+        #[arg(short = 'L', long = "depth", alias = "level", alias = "deep")]
+        depth: Option<usize>,
+        #[arg(short = 'a', long = "all", alias = "show-hidden")]
+        all: bool,
+        #[arg(short = 'd', long)]
+        dirs_only: bool,
+        #[arg(short = 'f', long)]
+        full_path: bool,
+        #[arg(short = 's', long)]
+        size: bool,
         #[arg(long)]
         show_system: bool,
     },
@@ -463,6 +479,36 @@ fn run_drive_command(cli: &Cli, state: &RuntimeState) -> Result<()> {
                 flag_opt(*show_system),
             ))?;
             render_ls(&result, cli.json, *long)
+        }
+        Command::Tree {
+            path,
+            depth,
+            all,
+            dirs_only,
+            full_path,
+            size,
+            show_system,
+        } => {
+            let normalized_path = normalize_drive_path(&context, path.as_deref())?;
+            let result = client.call_drive(&ls_request(
+                Some(normalized_path.as_str()),
+                Some(true),
+                flag_opt(*all),
+                flag_opt(*show_system),
+            ))?;
+            let root_label = tree_root_label(path.as_deref(), normalized_path.as_str(), *full_path);
+            render_tree(
+                &result,
+                cli.json,
+                &root_label,
+                normalized_path.as_str(),
+                TreeRenderOptions {
+                    depth: *depth,
+                    dirs_only: *dirs_only,
+                    full_path: *full_path,
+                    show_size: *size,
+                },
+            )
         }
         Command::Glob {
             pattern,
@@ -2299,27 +2345,64 @@ fn render_ls(value: &Value, json_mode: bool, _long: bool) -> Result<()> {
         .cloned()
         .unwrap_or_default();
     for entry in entries {
-        let name = ls_entry_display_name(&entry);
+        let name = ls_entry_display_label(&entry);
         let kind = ls_entry_type_label(&entry);
         let size = ls_entry_size(&entry);
-        println!("{kind:<7} {size:>8} {name}");
+        let indexing = ls_entry_indexing_status(&entry);
+        println!("{kind:<7} {size:>8} {indexing:<14} {name}");
     }
     Ok(())
 }
 
-/// Selects the user-facing ls label while preserving raw paths for JSON mode.
-fn ls_entry_display_name(entry: &Value) -> &str {
+/// Selects the ls name column: real path segment, plus display metadata when it differs.
+fn ls_entry_display_label(entry: &Value) -> String {
+    let name = ls_entry_path_name(entry);
+    let Some(display_name) = ls_entry_display_name(entry) else {
+        return name;
+    };
+
+    if name.is_empty() {
+        return display_name.to_owned();
+    }
+    if display_name == name {
+        return name;
+    }
+    format!("{name} ({display_name})")
+}
+
+/// Reads the actual path segment a caller can pass back to Drive.
+fn ls_entry_path_name(entry: &Value) -> String {
+    if let Some(name) = entry
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    {
+        return name.to_owned();
+    }
+
+    if let Some(full_path) = ls_entry_full_path(entry) {
+        if let Some(segment) = full_path
+            .split('/')
+            .rev()
+            .find(|component| !component.is_empty())
+        {
+            return segment.to_owned();
+        }
+    }
+
+    ls_entry_display_name(entry).unwrap_or("").to_owned()
+}
+
+/// Selects optional human display metadata without replacing the path name.
+fn ls_entry_display_name(entry: &Value) -> Option<&str> {
     let metadata = entry.get("metadata").and_then(Value::as_object);
     entry
         .get("displayName")
         .or_else(|| entry.get("display_name"))
         .or_else(|| metadata.and_then(|value| value.get("displayName")))
         .or_else(|| metadata.and_then(|value| value.get("display_name")))
-        .or_else(|| entry.get("name"))
-        .or_else(|| entry.get("full_path"))
-        .or_else(|| entry.get("fullPath"))
         .and_then(Value::as_str)
-        .unwrap_or("")
+        .filter(|value| !value.is_empty())
 }
 
 /// Normalizes Drive path types into an ls-like fixed-width marker.
@@ -2354,6 +2437,225 @@ fn ls_entry_size(entry: &Value) -> u64 {
                 .or_else(|| value.as_i64().and_then(|number| u64::try_from(number).ok()))
         })
         .unwrap_or(0)
+}
+
+/// Reads Drive indexing status for human ls output, falling back to a visible marker.
+fn ls_entry_indexing_status(entry: &Value) -> &str {
+    entry
+        .get("indexingStatus")
+        .or_else(|| entry.get("indexing_status"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("-")
+}
+
+/// Carries user-selected tree rendering flags independently from the API call.
+#[derive(Debug, Clone, Copy)]
+struct TreeRenderOptions {
+    depth: Option<usize>,
+    dirs_only: bool,
+    full_path: bool,
+    show_size: bool,
+}
+
+/// Stores one rendered Drive path and its sorted children for tree output.
+#[derive(Debug, Clone)]
+struct TreeNode {
+    item: TreeItem,
+    children: BTreeMap<String, TreeNode>,
+}
+
+/// Stores the display fields needed by the CLI tree renderer.
+#[derive(Debug, Clone)]
+struct TreeItem {
+    label: String,
+    full_path: Option<String>,
+    type_label: String,
+    size: u64,
+    is_dir: bool,
+}
+
+impl TreeItem {
+    /// Creates a synthetic directory for parent path components absent from a response.
+    fn directory_placeholder(label: &str) -> Self {
+        Self {
+            label: label.to_owned(),
+            full_path: None,
+            type_label: "<DIR>".to_owned(),
+            size: 0,
+            is_dir: true,
+        }
+    }
+}
+
+impl TreeNode {
+    /// Creates a tree node with no children.
+    fn new(item: TreeItem) -> Self {
+        Self {
+            item,
+            children: BTreeMap::new(),
+        }
+    }
+}
+
+/// Renders a recursive ls response as an ASCII tree for humans or raw JSON for scripts.
+fn render_tree(
+    value: &Value,
+    json_mode: bool,
+    root_label: &str,
+    root_path: &str,
+    options: TreeRenderOptions,
+) -> Result<()> {
+    if json_mode {
+        return render_value(value, true);
+    }
+
+    let mut root = TreeNode::new(TreeItem::directory_placeholder(root_label));
+    let entries = value
+        .get("entries")
+        .or_else(|| value.get("items"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    for entry in entries {
+        let item = tree_item_from_entry(&entry);
+        if options.dirs_only && !item.is_dir {
+            continue;
+        }
+        let components = tree_entry_components(&entry, root_path, &item.label);
+        if components.is_empty() {
+            continue;
+        }
+        if options
+            .depth
+            .is_some_and(|max_depth| components.len() > max_depth)
+        {
+            continue;
+        }
+        insert_tree_item(&mut root, &components, item);
+    }
+
+    println!("{root_label}");
+    render_tree_children(&root.children, "", &options);
+    Ok(())
+}
+
+/// Selects the root line shown before tree children.
+fn tree_root_label(path: Option<&str>, normalized_path: &str, full_path: bool) -> String {
+    if full_path {
+        return normalized_path.to_owned();
+    }
+    path.filter(|value| !value.trim().is_empty())
+        .unwrap_or(".")
+        .to_owned()
+}
+
+/// Builds the tree display item from one Drive list entry.
+fn tree_item_from_entry(entry: &Value) -> TreeItem {
+    let label = ls_entry_display_label(entry);
+    let type_label = ls_entry_type_label(entry);
+    let is_dir = type_label == "<DIR>";
+    TreeItem {
+        label,
+        full_path: ls_entry_full_path(entry).map(ToOwned::to_owned),
+        type_label,
+        size: ls_entry_size(entry),
+        is_dir,
+    }
+}
+
+/// Reads a Drive entry full path from snake_case or camelCase response fields.
+fn ls_entry_full_path(entry: &Value) -> Option<&str> {
+    entry
+        .get("full_path")
+        .or_else(|| entry.get("fullPath"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+}
+
+/// Computes path components relative to the listed root path for tree placement.
+fn tree_entry_components(entry: &Value, root_path: &str, fallback_label: &str) -> Vec<String> {
+    let Some(full_path) = ls_entry_full_path(entry) else {
+        return vec![fallback_label.to_owned()];
+    };
+
+    let root = root_path.trim_matches('/');
+    let path = full_path.trim_matches('/');
+
+    if !root.is_empty() {
+        if path == root {
+            return Vec::new();
+        }
+        if let Some(relative) = path.strip_prefix(&format!("{root}/")) {
+            return split_tree_path(relative);
+        }
+        return vec![fallback_label.to_owned()];
+    }
+
+    split_tree_path(path)
+}
+
+/// Splits normalized Drive paths into tree components without empty segments.
+fn split_tree_path(path: &str) -> Vec<String> {
+    path.split('/')
+        .filter(|component| !component.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// Inserts one Drive item into the tree, creating placeholder parent dirs as needed.
+fn insert_tree_item(root: &mut TreeNode, components: &[String], item: TreeItem) {
+    let mut node = root;
+    for (index, component) in components.iter().enumerate() {
+        let is_leaf = index + 1 == components.len();
+        let child = node
+            .children
+            .entry(component.clone())
+            .or_insert_with(|| TreeNode::new(TreeItem::directory_placeholder(component)));
+        if is_leaf {
+            child.item = item.clone();
+        }
+        node = child;
+    }
+}
+
+/// Recursively prints sorted tree children with ASCII branch connectors.
+fn render_tree_children(
+    children: &BTreeMap<String, TreeNode>,
+    prefix: &str,
+    options: &TreeRenderOptions,
+) {
+    let total = children.len();
+    for (index, node) in children.values().enumerate() {
+        let is_last = index + 1 == total;
+        let connector = if is_last { "`--" } else { "|--" };
+        println!(
+            "{prefix}{connector} {}",
+            format_tree_item(&node.item, options)
+        );
+        let child_prefix = if is_last {
+            format!("{prefix}    ")
+        } else {
+            format!("{prefix}|   ")
+        };
+        render_tree_children(&node.children, &child_prefix, options);
+    }
+}
+
+/// Formats a single tree row using optional size and full-path columns.
+fn format_tree_item(item: &TreeItem, options: &TreeRenderOptions) -> String {
+    let label = if options.full_path {
+        item.full_path.as_deref().unwrap_or(&item.label)
+    } else {
+        &item.label
+    };
+
+    if options.show_size {
+        format!("{} {:>8} {label}", item.type_label, item.size)
+    } else {
+        format!("{} {label}", item.type_label)
+    }
 }
 
 /// Reads a required string from a JSON object.

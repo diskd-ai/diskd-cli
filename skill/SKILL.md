@@ -1,6 +1,6 @@
 ---
 name: diskd-cli
-description: diskd CLI (`diskd`) usage for the diskd Drive API through the public apis-service gateway. Use when listing, reading, searching, uploading, syncing, copying, moving, or deleting Drive files from the command line; running exact/BM25 search (`grep`), semantic search (`vsearch`), or natural-language (plain-English) questions over indexed CSV/TSV/XLS/XLSX spreadsheets where the Drive backend generates the SQL (`biquery`); creating, inserting, querying, committing, rolling back, inspecting, dropping, resolving, or setting status on generic Drive DBs (`database`, alias `db`) and Telegram Drive DBs (`telegram-db`); managing auth (`login`/`logout`/`whoami`), project context (`set-context`/`get-context`), self-update (`update`), JSON output for scripts (`--json`), or the embedded MCP stdio server (`diskd mcp serve`). Triggers on mentions of diskd, diskd CLI, `diskd ls/cat/read/grep/vsearch/biquery/database/db/telegram-db/upload/sync`, the diskd drive, or adding diskd as an MCP server to an agent.
+description: diskd CLI (`diskd`) usage for the diskd Drive API through the public apis-service gateway. Use when listing, rendering trees, reading, searching, uploading, syncing, copying, moving, or deleting Drive files from the command line; running exact/BM25 search (`grep`), semantic search (`vsearch`), or natural-language (plain-English) questions over indexed CSV/TSV/XLS/XLSX spreadsheets where the Drive backend generates the SQL (`biquery`); creating, inserting, querying, committing, rolling back, inspecting, dropping, resolving, or setting status on generic Drive DBs (`database`, alias `db`) and Telegram Drive DBs (`telegram-db`); managing auth (`login`/`logout`/`whoami`), project context (`set-context`/`get-context`), self-update (`update`), JSON output for scripts (`--json`), or the embedded MCP stdio server (`diskd mcp serve`). Triggers on mentions of diskd, diskd CLI, `diskd ls/tree/cat/read/grep/vsearch/biquery/database/db/telegram-db/upload/sync`, the diskd drive, or adding diskd as an MCP server to an agent.
 ---
 
 # diskd CLI
@@ -76,7 +76,8 @@ diskd --json vsearch "contract renewal clauses" docs/report.pdf --top 5
 
 | Command | Purpose |
 | --- | --- |
-| `ls [path]` | List a Drive path as `<DIR>/<FILE>`, size, and display name. Flags: `--recursive`, `--long`, `--show-hidden`, `--show-system`. |
+| `ls [path]` | List a Drive path as `<DIR>/<FILE>`, size, indexing status, and copyable name with display metadata. Flags: `--recursive`, `--long`, `--show-hidden`, `--show-system`. |
+| `tree [path]` | Render a recursive Drive tree. Flags: `-L`/`--depth`/`--deep <n>`, `-a`/`--all`, `-d`/`--dirs-only`, `-f`/`--full-path`, `-s`/`--size`, `--show-system`. |
 | `glob <pattern>` | Glob match. Flags: `--path <dir>`, `--show-hidden`, `--show-system`. |
 | `grep <query> [paths...]` | Exact/BM25 content search. Flags: `--limit`, `--offset`. Paths default to the context root. |
 | `vsearch <query> [paths...]` | Semantic search. Flags: `--limit` (alias `--top`), `--offset`. |
