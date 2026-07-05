@@ -1,9 +1,11 @@
+use std::cmp::Ordering;
 use std::env;
+use std::ffi::OsStr;
 use std::fs;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Cursor, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -19,10 +21,20 @@ use diskd_config::{
     parse_client_credentials_file, parse_config_document, parse_stored_credentials,
     resolve_setting, DiskdConfig, DriveContext, ProjectId, StoredCredentials,
 };
+use flate2::read::GzDecoder;
+use reqwest::blocking::Client as HttpClient;
+use reqwest::header::{ACCEPT, USER_AGENT};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use tar::Archive;
 
 const DEFAULT_BASE_URL: &str = "https://apis.diskd.ai";
+const GITHUB_API_BASE_URL: &str = "https://api.github.com";
+const GITHUB_REPOSITORY: &str = "diskd-ai/diskd-cli";
+const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_millis(900);
+const UPDATE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
+const UPDATE_CHECK_DISABLE_ENV: &str = "DISKD_NO_UPDATE_CHECK";
 const TOKEN_SCOPES: &[&str] = &[
     "drive:read",
     "drive:write",
@@ -167,6 +179,10 @@ enum Command {
     },
     GetContext,
     Version,
+    Update {
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 /// Groups MCP subcommands under the mcp command namespace.
@@ -191,6 +207,37 @@ struct UploadFile {
     relative_path: PathBuf,
 }
 
+/// Represents the GitHub release shape used by update checks and installs.
+#[derive(Debug, Clone, Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+    html_url: String,
+    assets: Vec<GitHubReleaseAsset>,
+}
+
+/// Represents one downloadable GitHub release asset.
+#[derive(Debug, Clone, Deserialize)]
+struct GitHubReleaseAsset {
+    name: String,
+    browser_download_url: String,
+}
+
+/// Carries a matching platform archive and checksum selected from a release.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReleaseAssetPair {
+    archive_url: String,
+    checksum_url: String,
+}
+
+/// Describes an available release that can update the running binary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AvailableUpdate {
+    current_version: String,
+    latest_version: String,
+    release_url: String,
+    assets: ReleaseAssetPair,
+}
+
 /// Starts the diskd CLI process and converts failures into non-zero exits.
 fn main() {
     if let Err(error) = run() {
@@ -202,6 +249,16 @@ fn main() {
 /// Runs command dispatch after parsing CLI arguments.
 fn run() -> Result<()> {
     let cli = Cli::parse();
+    if should_show_mcp_setup_instructions(&cli) {
+        return print_mcp_setup_instructions();
+    }
+    maybe_show_update_notice(&cli);
+    match &cli.command {
+        Command::Version => return print_version(&cli),
+        Command::Update { force } => return update_cli(&cli, *force),
+        _ => {}
+    }
+
     let mut state = load_runtime_state(cli.config.as_deref())?;
     match &cli.command {
         Command::Login {
@@ -221,7 +278,6 @@ fn run() -> Result<()> {
             root,
         } => set_context(&cli, &mut state, project.as_deref(), *list, *root),
         Command::GetContext => get_context(&cli, &state),
-        Command::Version => print_version(&cli),
         Command::Mcp {
             command: McpCommand::Serve,
         } => run_mcp_serve(&cli, &state),
@@ -548,6 +604,430 @@ fn print_version(cli: &Cli) -> Result<()> {
         "repository": "https://github.com/diskd-ai/diskd-cli",
     });
     render_value(&value, cli.json)
+}
+
+/// Updates the running diskd binary from the latest GitHub release.
+fn update_cli(cli: &Cli, force: bool) -> Result<()> {
+    let http = build_update_http_client(UPDATE_DOWNLOAD_TIMEOUT)?;
+    let release = fetch_latest_release(&http)?;
+    let target = current_release_target()?;
+    let current_version = env!("CARGO_PKG_VERSION");
+    let Some(update) = available_update_from_release(&release, current_version, target, force)?
+    else {
+        let latest_version = normalize_release_version(&release.tag_name);
+        if cli.json {
+            render_value(
+                &json!({
+                    "updated": false,
+                    "current_version": current_version,
+                    "latest_version": latest_version,
+                }),
+                true,
+            )
+        } else {
+            println!("diskd is up to date ({current_version})");
+            Ok(())
+        }?;
+        return Ok(());
+    };
+
+    let archive_bytes = download_release_bytes(&http, &update.assets.archive_url)
+        .context("failed to download update archive")?;
+    let checksum_document = download_release_bytes(&http, &update.assets.checksum_url)
+        .context("failed to download update checksum")?;
+    verify_archive_checksum(&archive_bytes, &checksum_document)?;
+    install_update_archive(&archive_bytes)?;
+
+    if cli.json {
+        render_value(
+            &json!({
+                "updated": true,
+                "previous_version": update.current_version,
+                "current_version": update.latest_version,
+                "release_url": update.release_url,
+            }),
+            true,
+        )
+    } else {
+        println!(
+            "updated diskd from {} to {}",
+            update.current_version, update.latest_version
+        );
+        Ok(())
+    }
+}
+
+/// Prints a best-effort yellow notice when a newer release exists.
+fn maybe_show_update_notice(cli: &Cli) {
+    if !should_check_for_updates(cli) {
+        return;
+    }
+    match check_for_available_update(UPDATE_CHECK_TIMEOUT) {
+        Ok(Some(update)) => eprintln!(
+            "\x1b[33mdiskd {} is available; current is {}. Run `diskd update`.\x1b[0m",
+            update.latest_version, update.current_version
+        ),
+        Ok(None) => {}
+        Err(error) => eprintln!("diskd: update check failed: {error:#}"),
+    }
+}
+
+/// Decides whether this invocation may emit human update text to stderr.
+fn should_check_for_updates(cli: &Cli) -> bool {
+    if cli.quiet || cli.json || env::var_os(UPDATE_CHECK_DISABLE_ENV).is_some() {
+        return false;
+    }
+    !matches!(
+        &cli.command,
+        Command::Update { .. }
+            | Command::Mcp {
+                command: McpCommand::Serve
+            }
+    )
+}
+
+/// Looks up the latest release using a short timeout for command-start checks.
+fn check_for_available_update(timeout: Duration) -> Result<Option<AvailableUpdate>> {
+    let http = build_update_http_client(timeout)?;
+    let release = fetch_latest_release(&http)?;
+    let target = current_release_target()?;
+    available_update_from_release(&release, env!("CARGO_PKG_VERSION"), target, false)
+}
+
+/// Builds an HTTP client for GitHub release metadata and asset downloads.
+fn build_update_http_client(timeout: Duration) -> Result<HttpClient> {
+    HttpClient::builder()
+        .timeout(timeout)
+        .build()
+        .context("failed to build update HTTP client")
+}
+
+/// Fetches the latest public GitHub release metadata for diskd-cli.
+fn fetch_latest_release(http: &HttpClient) -> Result<GitHubRelease> {
+    let response = http
+        .get(latest_release_url())
+        .header(USER_AGENT, update_user_agent())
+        .header(ACCEPT, "application/vnd.github+json")
+        .send()
+        .context("failed to request latest diskd release")?
+        .error_for_status()
+        .context("latest diskd release request failed")?;
+    response
+        .json::<GitHubRelease>()
+        .context("failed to decode latest diskd release")
+}
+
+/// Builds the GitHub API URL for the latest diskd-cli release.
+fn latest_release_url() -> String {
+    format!("{GITHUB_API_BASE_URL}/repos/{GITHUB_REPOSITORY}/releases/latest")
+}
+
+/// Returns the update user agent required by GitHub API requests.
+fn update_user_agent() -> String {
+    format!("diskd/{}", env!("CARGO_PKG_VERSION"))
+}
+
+/// Resolves whether a GitHub release can update this binary on this platform.
+fn available_update_from_release(
+    release: &GitHubRelease,
+    current_version: &str,
+    target: &str,
+    force: bool,
+) -> Result<Option<AvailableUpdate>> {
+    if !force && !is_newer_release(&release.tag_name, current_version) {
+        return Ok(None);
+    }
+    let assets = select_release_asset_pair(release, target)?;
+    Ok(Some(AvailableUpdate {
+        current_version: current_version.to_owned(),
+        latest_version: normalize_release_version(&release.tag_name),
+        release_url: release.html_url.clone(),
+        assets,
+    }))
+}
+
+/// Selects the platform archive and checksum assets from a release.
+fn select_release_asset_pair(release: &GitHubRelease, target: &str) -> Result<ReleaseAssetPair> {
+    let archive_name = release_archive_name(&release.tag_name, target);
+    let checksum_name = release_checksum_name(&release.tag_name, target);
+    let archive = release
+        .assets
+        .iter()
+        .find(|asset| asset.name == archive_name)
+        .with_context(|| format!("release asset is missing: {archive_name}"))?;
+    let checksum = release
+        .assets
+        .iter()
+        .find(|asset| asset.name == checksum_name)
+        .with_context(|| format!("release asset is missing: {checksum_name}"))?;
+    Ok(ReleaseAssetPair {
+        archive_url: archive.browser_download_url.clone(),
+        checksum_url: checksum.browser_download_url.clone(),
+    })
+}
+
+/// Builds the platform archive name produced by the release workflow.
+fn release_archive_name(tag_name: &str, target: &str) -> String {
+    format!("diskd-{}-{target}.tar.gz", normalize_release_tag(tag_name))
+}
+
+/// Builds the checksum asset name produced by the release workflow.
+fn release_checksum_name(tag_name: &str, target: &str) -> String {
+    format!("{}.sha256", release_archive_name(tag_name, target))
+}
+
+/// Normalizes release tags to the public v-prefixed form used in asset names.
+fn normalize_release_tag(tag_name: &str) -> String {
+    let trimmed = tag_name.trim();
+    if trimmed.starts_with('v') {
+        trimmed.to_owned()
+    } else {
+        format!("v{trimmed}")
+    }
+}
+
+/// Normalizes release tags for user-facing version comparisons.
+fn normalize_release_version(tag_name: &str) -> String {
+    tag_name.trim().trim_start_matches('v').to_owned()
+}
+
+/// Compares a latest release tag against the compiled package version.
+fn is_newer_release(latest_tag: &str, current_version: &str) -> bool {
+    matches!(
+        compare_release_versions(latest_tag, current_version),
+        Some(Ordering::Greater)
+    )
+}
+
+/// Compares dotted numeric release versions while ignoring a leading v.
+fn compare_release_versions(left: &str, right: &str) -> Option<Ordering> {
+    let left_parts = parse_release_version(left)?;
+    let right_parts = parse_release_version(right)?;
+    let length = left_parts.len().max(right_parts.len());
+    for index in 0..length {
+        let left_value = left_parts.get(index).copied().unwrap_or(0);
+        let right_value = right_parts.get(index).copied().unwrap_or(0);
+        match left_value.cmp(&right_value) {
+            Ordering::Equal => {}
+            ordering => return Some(ordering),
+        }
+    }
+    Some(Ordering::Equal)
+}
+
+/// Parses simple semver-like numeric release versions used by diskd tags.
+fn parse_release_version(value: &str) -> Option<Vec<u64>> {
+    let normalized = value
+        .trim()
+        .trim_start_matches('v')
+        .split_once('-')
+        .map_or_else(
+            || value.trim().trim_start_matches('v'),
+            |(version, _)| version,
+        );
+    if normalized.is_empty() {
+        return None;
+    }
+    normalized
+        .split('.')
+        .map(|part| {
+            if part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()) {
+                None
+            } else {
+                part.parse::<u64>().ok()
+            }
+        })
+        .collect()
+}
+
+/// Resolves the release target triple for the current operating system.
+fn current_release_target() -> Result<&'static str> {
+    release_target_for(env::consts::OS, env::consts::ARCH).with_context(|| {
+        format!(
+            "diskd update is not available for {}-{}",
+            env::consts::ARCH,
+            env::consts::OS
+        )
+    })
+}
+
+/// Maps Rust runtime OS and architecture labels to release workflow targets.
+fn release_target_for(os: &str, arch: &str) -> Option<&'static str> {
+    match (os, arch) {
+        ("linux", "x86_64") => Some("x86_64-unknown-linux-musl"),
+        ("linux", "aarch64") => Some("aarch64-unknown-linux-musl"),
+        ("macos", "x86_64") => Some("x86_64-apple-darwin"),
+        ("macos", "aarch64") => Some("aarch64-apple-darwin"),
+        ("windows", "x86_64") => Some("x86_64-pc-windows-msvc"),
+        _ => None,
+    }
+}
+
+/// Downloads one release asset body from GitHub.
+fn download_release_bytes(http: &HttpClient, url: &str) -> Result<Vec<u8>> {
+    let bytes = http
+        .get(url)
+        .header(USER_AGENT, update_user_agent())
+        .send()
+        .with_context(|| format!("failed to request {url}"))?
+        .error_for_status()
+        .with_context(|| format!("release asset request failed for {url}"))?
+        .bytes()
+        .with_context(|| format!("failed to read release asset {url}"))?;
+    Ok(bytes.to_vec())
+}
+
+/// Verifies the archive bytes against the downloaded .sha256 document.
+fn verify_archive_checksum(archive_bytes: &[u8], checksum_document: &[u8]) -> Result<()> {
+    let checksum_text = std::str::from_utf8(checksum_document)
+        .context("update checksum document is not valid UTF-8")?;
+    let expected = parse_sha256_checksum(checksum_text)?;
+    let actual = sha256_hex(archive_bytes);
+    if actual != expected {
+        bail!("update checksum mismatch: expected {expected}, got {actual}");
+    }
+    Ok(())
+}
+
+/// Parses the first hex digest from a sha256sum-compatible checksum document.
+fn parse_sha256_checksum(document: &str) -> Result<String> {
+    let checksum = document
+        .split_whitespace()
+        .next()
+        .context("checksum document is empty")?;
+    if checksum.len() != 64 || !checksum.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("checksum document does not start with a SHA-256 hex digest");
+    }
+    Ok(checksum.to_ascii_lowercase())
+}
+
+/// Extracts and installs the verified update archive over the running binary.
+fn install_update_archive(archive_bytes: &[u8]) -> Result<()> {
+    let temp_dir = create_update_temp_dir()?;
+    let result = install_update_from_temp_dir(archive_bytes, &temp_dir);
+    if let Err(error) = fs::remove_dir_all(&temp_dir) {
+        eprintln!(
+            "diskd: failed to remove temporary update directory {}: {error}",
+            temp_dir.display()
+        );
+    }
+    result
+}
+
+/// Performs update extraction and binary replacement using a temporary directory.
+fn install_update_from_temp_dir(archive_bytes: &[u8], temp_dir: &Path) -> Result<()> {
+    let binary_path = extract_diskd_binary(archive_bytes, temp_dir)?;
+    self_replace::self_replace(&binary_path).context("failed to replace current diskd binary")?;
+    Ok(())
+}
+
+/// Creates a private temporary directory for update extraction.
+fn create_update_temp_dir() -> Result<PathBuf> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before UNIX epoch")?
+        .as_nanos();
+    for attempt in 0..10 {
+        let candidate = env::temp_dir().join(format!(
+            "diskd-update-{}-{timestamp}-{attempt}",
+            std::process::id()
+        ));
+        match fs::create_dir(&candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to create {}", candidate.display()));
+            }
+        }
+    }
+    bail!("failed to create a unique update temporary directory")
+}
+
+/// Extracts the diskd binary from a release tar.gz archive into the temp dir.
+fn extract_diskd_binary(archive_bytes: &[u8], temp_dir: &Path) -> Result<PathBuf> {
+    let decoder = GzDecoder::new(Cursor::new(archive_bytes));
+    let mut archive = Archive::new(decoder);
+    let output_path = temp_dir.join(platform_binary_name());
+    for entry in archive.entries().context("failed to read update archive")? {
+        let mut entry = entry.context("failed to read update archive entry")?;
+        let entry_path = entry
+            .path()
+            .context("failed to read update archive entry path")?
+            .into_owned();
+        if entry_path.file_name() == Some(OsStr::new("diskd")) {
+            entry
+                .unpack(&output_path)
+                .context("failed to extract diskd binary from update archive")?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&output_path, fs::Permissions::from_mode(0o755))
+                    .context("failed to set update binary permissions")?;
+            }
+            return Ok(output_path);
+        }
+    }
+    bail!("update archive does not contain a diskd binary")
+}
+
+/// Returns the local executable file name used during update extraction.
+fn platform_binary_name() -> &'static str {
+    if cfg!(windows) {
+        "diskd.exe"
+    } else {
+        "diskd"
+    }
+}
+
+/// Detects direct terminal execution of the stdio MCP server command.
+fn should_show_mcp_setup_instructions(cli: &Cli) -> bool {
+    matches!(
+        &cli.command,
+        Command::Mcp {
+            command: McpCommand::Serve
+        }
+    ) && io::stdin().is_terminal()
+        && io::stdout().is_terminal()
+}
+
+/// Prints human setup instructions for connecting diskd to an LLM MCP client.
+fn print_mcp_setup_instructions() -> Result<()> {
+    let command = env::current_exe()
+        .ok()
+        .and_then(|path| path.into_os_string().into_string().ok())
+        .unwrap_or_else(|| "diskd".to_owned());
+    println!("diskd MCP server");
+    println!();
+    println!("Add this server to your LLM agent MCP configuration:");
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&mcp_agent_config(&command))?
+    );
+    println!();
+    println!("Authenticate before connecting:");
+    println!("  diskd login --token \"$APIS_ACCESS_TOKEN\"");
+    println!();
+    println!("Or add APIS_ACCESS_TOKEN to the env block in the MCP configuration.");
+    println!(
+        "The LLM agent must launch this command over stdio; direct terminal runs show this guide."
+    );
+    Ok(())
+}
+
+/// Builds the JSON MCP server config shown to users and tested for stability.
+fn mcp_agent_config(command: &str) -> Value {
+    json!({
+        "mcpServers": {
+            "diskd": {
+                "command": command,
+                "args": ["mcp", "serve"],
+                "env": {
+                    "APIS_BASE_URL": DEFAULT_BASE_URL
+                }
+            }
+        }
+    })
 }
 
 /// Runs a one-shot or polling one-way local folder sync to the Drive.
@@ -1251,5 +1731,94 @@ fn join_drive_path(base: &str, segment: &str) -> String {
         format!("/{segment}")
     } else {
         format!("{}/{}", base.trim_end_matches('/'), segment)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compares_release_versions_numerically() {
+        /* REQ-DISKD-CLI-020: Update checks must compare release tags numerically instead of lexically. */
+        assert!(is_newer_release("v0.1.10", "0.1.9"));
+        assert!(!is_newer_release("v0.1.0", "0.1.0"));
+        assert_eq!(
+            compare_release_versions("v1.2", "1.2.0"),
+            Some(Ordering::Equal)
+        );
+    }
+
+    #[test]
+    fn selects_platform_release_assets() {
+        /* REQ-DISKD-CLI-021: Update installs must select the archive and checksum for the current platform target. */
+        let release = GitHubRelease {
+            tag_name: "v0.2.0".to_owned(),
+            html_url: "https://github.com/diskd-ai/diskd-cli/releases/tag/v0.2.0".to_owned(),
+            assets: vec![
+                GitHubReleaseAsset {
+                    name: "diskd-v0.2.0-x86_64-apple-darwin.tar.gz".to_owned(),
+                    browser_download_url: "https://example.test/archive".to_owned(),
+                },
+                GitHubReleaseAsset {
+                    name: "diskd-v0.2.0-x86_64-apple-darwin.tar.gz.sha256".to_owned(),
+                    browser_download_url: "https://example.test/checksum".to_owned(),
+                },
+            ],
+        };
+
+        let pair = select_release_asset_pair(&release, "x86_64-apple-darwin").unwrap();
+
+        assert_eq!(pair.archive_url, "https://example.test/archive");
+        assert_eq!(pair.checksum_url, "https://example.test/checksum");
+    }
+
+    #[test]
+    fn parses_sha256_checksum_document() {
+        /* REQ-DISKD-CLI-022: Update installs must verify the downloaded archive before replacing the binary. */
+        let checksum = parse_sha256_checksum(
+            "ABCDEFabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123  diskd.tar.gz\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            checksum,
+            "abcdefabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123"
+        );
+    }
+
+    #[test]
+    fn maps_supported_release_targets() {
+        /* REQ-DISKD-CLI-023: Update installs must use the release target names emitted by GitHub Actions. */
+        assert_eq!(
+            release_target_for("linux", "x86_64"),
+            Some("x86_64-unknown-linux-musl")
+        );
+        assert_eq!(
+            release_target_for("macos", "aarch64"),
+            Some("aarch64-apple-darwin")
+        );
+        assert_eq!(
+            release_target_for("windows", "x86_64"),
+            Some("x86_64-pc-windows-msvc")
+        );
+        assert_eq!(release_target_for("freebsd", "x86_64"), None);
+    }
+
+    #[test]
+    fn builds_mcp_agent_config_for_stdio_server() {
+        /* REQ-DISKD-CLI-024: Direct MCP serve runs must show a stable LLM-agent configuration snippet. */
+        let config = mcp_agent_config("/usr/local/bin/diskd");
+
+        assert_eq!(
+            config["mcpServers"]["diskd"]["command"],
+            "/usr/local/bin/diskd"
+        );
+        assert_eq!(config["mcpServers"]["diskd"]["args"][0], "mcp");
+        assert_eq!(config["mcpServers"]["diskd"]["args"][1], "serve");
+        assert_eq!(
+            config["mcpServers"]["diskd"]["env"]["APIS_BASE_URL"],
+            DEFAULT_BASE_URL
+        );
     }
 }

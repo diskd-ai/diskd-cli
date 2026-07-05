@@ -1,6 +1,6 @@
 [package]
 name = "diskd-cli"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -11,9 +11,14 @@ base64 = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 diskd-client = { path = "../diskd-client" }
 diskd-config = { path = "../diskd-config" }
+flate2 = { workspace = true }
 mime_guess = { workspace = true }
+reqwest = { workspace = true, features = ["blocking", "json", "rustls"] }
+self-replace = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+tar = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
