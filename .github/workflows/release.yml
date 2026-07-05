@@ -130,8 +130,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! gh release view "$DISKD_VERSION" >/dev/null 2>&1; then
-            gh release create "$DISKD_VERSION" --title "$DISKD_VERSION" --notes "diskd CLI $DISKD_VERSION"
+          if ! gh release view "$DISKD_VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$DISKD_VERSION" --repo "$GITHUB_REPOSITORY" --title "$DISKD_VERSION" --notes "diskd CLI $DISKD_VERSION"
           fi
-          gh release upload "$DISKD_VERSION" dist/*.tar.gz dist/*.sha256 --clobber
-
+          gh release upload "$DISKD_VERSION" dist/*.tar.gz dist/*.sha256 --repo "$GITHUB_REPOSITORY" --clobber
