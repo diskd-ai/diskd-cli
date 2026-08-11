@@ -1,9 +1,25 @@
+use std::io::{self, Read, Write};
+
 use base64::prelude::{Engine as _, BASE64_STANDARD};
-use reqwest::blocking::Client;
-use reqwest::header::{CONTENT_TYPE, ETAG};
+use reqwest::blocking::{Body, Client};
+use reqwest::header::{CONTENT_LENGTH, CONTENT_TYPE, ETAG};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use thiserror::Error;
+
+mod projects;
+mod sessions;
+
+pub use projects::{project_item_url, Project, ProjectCreateParams, ProjectUpdateParams};
+pub use sessions::{
+    session_append_messages_request, session_delete_messages_request, session_delete_request,
+    session_get_message_range_request, session_get_preview_request, session_get_request,
+    session_list_request, session_rpc_url, session_save_request, SessionAppendMessagesResult,
+    SessionConfig, SessionDeleteMessages, SessionDeleteMessagesResult, SessionDeleteResult,
+    SessionDocument, SessionExchange, SessionGetMessageRangeResult, SessionGetPreviewResult,
+    SessionGetResult, SessionListItem, SessionListResult, SessionMessage, SessionParticipant,
+    SessionSaveResult,
+};
 
 /// Captures JSON values needed by the first Drive JSON-RPC contract slice.
 #[derive(Debug, Clone, PartialEq)]
@@ -28,13 +44,6 @@ pub struct JsonRpcRequest {
     pub jsonrpc: &'static str,
     pub method: &'static str,
     pub params: Vec<RpcParam>,
-}
-
-/// Represents the minimal project fields needed by CLI context selection.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct ProjectSummary {
-    pub id: String,
-    pub name: String,
 }
 
 /// Represents the upload intent returned by drive/upload/start.
@@ -64,14 +73,22 @@ pub enum ClientError {
     EmptyBearerToken,
     #[error("HTTP transport failed: {0}")]
     Transport(#[from] reqwest::Error),
+    #[error("I/O failed: {0}")]
+    Io(#[from] io::Error),
     #[error("HTTP {status}: {message}")]
     Http { status: u16, message: String },
     #[error("Invalid JSON response: {reason}")]
     InvalidJson { reason: String },
     #[error("Invalid JSON-RPC response: expected object")]
     InvalidJsonRpcResponse,
-    #[error("JSON-RPC error: {0}")]
-    JsonRpc(String),
+    #[error("JSON-RPC error {code:?}: {message}; data={data:?}")]
+    JsonRpc {
+        code: Option<i64>,
+        message: String,
+        data: Option<Value>,
+    },
+    #[error("invalid input '{field}': {reason}")]
+    InvalidInput { field: &'static str, reason: String },
     #[error("response is missing required field '{field}'")]
     MissingField { field: &'static str },
     #[error("response field '{field}' has an invalid type")]
@@ -104,9 +121,13 @@ impl GatewayClient {
 
     /// Calls the Drive JSON-RPC endpoint and returns the raw result value.
     pub fn call_drive(&mut self, request: &JsonRpcRequest) -> Result<Value, ClientError> {
+        let url = drive_rpc_url(&self.base_url)?;
+        self.call_json_rpc(&url, request)
+    }
+
+    fn call_json_rpc(&mut self, url: &str, request: &JsonRpcRequest) -> Result<Value, ClientError> {
         let id = self.next_id;
         self.next_id += 1;
-        let url = drive_rpc_url(&self.base_url)?;
         let response = self
             .http
             .post(url)
@@ -116,26 +137,32 @@ impl GatewayClient {
         read_json_rpc_response(response)
     }
 
-    /// Lists projects visible to the current credential through platform projects.
-    pub fn list_projects(&self) -> Result<Vec<ProjectSummary>, ClientError> {
-        let url = projects_list_url(&self.base_url)?;
-        let response = self.http.get(url).bearer_auth(&self.bearer_token).send()?;
-        read_json_response(response)
+    /// Streams a URL returned by drive/files/download-url into a caller-owned writer.
+    pub fn download_to_writer<W: Write>(
+        &self,
+        url: &str,
+        writer: &mut W,
+    ) -> Result<u64, ClientError> {
+        let mut response = self.http.get(url).bearer_auth(&self.bearer_token).send()?;
+        let status = response.status();
+        if !status.is_success() {
+            let message = response.text()?;
+            return Err(ClientError::Http {
+                status: status.as_u16(),
+                message: message.chars().take(200).collect(),
+            });
+        }
+        Ok(io::copy(&mut response, writer)?)
     }
 
-    /// Downloads bytes from a URL returned by drive/files/download-url.
-    pub fn download_bytes(&self, url: &str) -> Result<Vec<u8>, ClientError> {
-        let response = self.http.get(url).bearer_auth(&self.bearer_token).send()?;
-        read_bytes_response(response)
-    }
-
-    /// Uploads bytes to an upload-proxy URL returned by drive/upload/start.
-    pub fn put_upload(
+    /// Streams a reader to an upload-proxy URL returned by drive/upload/start.
+    pub fn put_upload_reader<R: Read + Send + 'static>(
         &self,
         upload_url: &str,
         intent_id: &str,
         content_type: &str,
-        body: Vec<u8>,
+        content_length: u64,
+        reader: R,
     ) -> Result<String, ClientError> {
         let url = resolve_drive_relative_url(&self.base_url, upload_url)?;
         let response = self
@@ -143,8 +170,9 @@ impl GatewayClient {
             .put(url)
             .bearer_auth(&self.bearer_token)
             .header(CONTENT_TYPE, content_type)
+            .header(CONTENT_LENGTH, content_length)
             .header("X-Upload-Intent-Id", intent_id)
-            .body(body)
+            .body(Body::sized(reader, content_length))
             .send()?;
         read_upload_etag(response)
     }
@@ -698,9 +726,19 @@ fn read_json_rpc_response(response: reqwest::blocking::Response) -> Result<Value
         return Err(ClientError::InvalidJsonRpcResponse);
     };
     if let Some(error) = map.get("error") {
-        return Err(ClientError::JsonRpc(error.to_string()));
+        return Err(ClientError::JsonRpc {
+            code: error.get("code").and_then(Value::as_i64),
+            message: error
+                .get("message")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| error.to_string()),
+            data: error.get("data").cloned(),
+        });
     }
-    Ok(map.get("result").cloned().unwrap_or(Value::Null))
+    map.get("result")
+        .cloned()
+        .ok_or(ClientError::MissingField { field: "result" })
 }
 
 fn read_json_response<T: for<'de> Deserialize<'de>>(
@@ -720,25 +758,18 @@ fn read_json_response<T: for<'de> Deserialize<'de>>(
     })
 }
 
-fn read_bytes_response(response: reqwest::blocking::Response) -> Result<Vec<u8>, ClientError> {
-    let status = response.status();
-    if !status.is_success() {
-        let text = response.text().unwrap_or_else(|error| error.to_string());
-        return Err(ClientError::Http {
-            status: status.as_u16(),
-            message: text.chars().take(200).collect(),
-        });
-    }
-    Ok(response.bytes()?.to_vec())
-}
-
 fn read_upload_etag(response: reqwest::blocking::Response) -> Result<String, ClientError> {
     let status = response.status();
     let header_etag = response
         .headers()
         .get(ETAG)
-        .and_then(|value| value.to_str().ok())
-        .map(ToOwned::to_owned);
+        .map(|value| {
+            value
+                .to_str()
+                .map(ToOwned::to_owned)
+                .map_err(|_| ClientError::InvalidField { field: "etag" })
+        })
+        .transpose()?;
     let text = response.text()?;
     if !status.is_success() {
         return Err(ClientError::Http {

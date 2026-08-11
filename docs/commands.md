@@ -29,11 +29,14 @@ Global flags must be placed before the subcommand.
 | `grep` | `<query> [paths...]` | `--limit <n>`, `--offset <n>` | `paths/tools/grep` | Exact/BM25 search; omitted paths use context root. |
 | `vsearch` | `<query> [paths...]` | `--limit <n>`, `--top <n>` alias, `--offset <n>` | `paths/tools/vsearch` | Semantic search; prefer file paths when possible. |
 | `cat` | `<path>` | `--version <n>` | `drive/files/download-url` plus byte download | Raw bytes to stdout. |
+| `download` | `<path> <destination>` | `--version <n>`, `--force` | `drive/files/download-url` plus streamed GET | Atomically persists a local file after a complete response and flush. |
 | `read` | `<path>` | `--limit`/`--parts-limit`, `--offset`/`--parts-offset` | `paths/tools/read` | Structured parts plus pagination metadata. |
 | `stat` | `<path>` | none | `paths/tools/inode-ls` | Path metadata. |
 | `biquery` | `<question> [paths...]` | none | `paths/tools/bi-query` | Natural-language spreadsheet question, not SQL. |
 | `database` (`db`) | subcommand-specific | `create`, `insert`, `query`, `commit`, `rollback`, `metadata`, `drop`, `set-status`, `resolve-by-inode`, `resolve-with-settings` | `drive/db/*` | Generic Drive DB working API with optional `--db-type`. |
 | `telegram-db` | subcommand-specific | `create`, `insert`, `query`, `commit`, `metadata`, `drop` flags | `drive/telegram/*` | Telegram SQLite DB working API; `query` uses SQL against the named DB. |
+| `project` | subcommand-specific | `list`, `get`, `create`, `update`, `delete` | platform Projects REST | Full project lifecycle; delete requires `--yes`. |
+| `session` | subcommand-specific | `list`, `read`, `messages`, `save`, `append`, `remove`, `rollback`, `delete` | project-scoped Drive Session JSON-RPC | Uses `--project` or saved context; delete requires `--yes`. |
 | `upload` | `<local...>` | `--dest <dir>`, `--recursive`, `--force` | upload start, PUT, commit | Uploads files/folders. |
 | `mkdir` | `<path>` | none | `drive/paths/create` | Creates folder. |
 | `rm` | `<path>` | `--recursive` | `drive/paths/delete` | Deletes file/folder. |
@@ -118,12 +121,25 @@ Most human-facing commands perform a short startup update check. If a newer
 release exists, `diskd` prints a yellow stderr notice:
 
 ```text
-diskd 0.1.5 is available; current is 0.1.4. Run `diskd update`.
+diskd 0.2.0 is available; current is 0.1.5. Run `diskd update`.
 ```
 
 Startup checks are skipped for `--json`, `--quiet`, and `diskd mcp serve`.
 
 ## Project Context
+
+### `project`
+
+```sh
+diskd --json project list
+diskd --json project get <project-id>
+diskd --json project create <name> [--description <text>] [--icon <value>] [--icon-color <value>]
+diskd --json project update <project-id> [--name <name>] [--description <text>] [--icon <value>] [--icon-color <value>]
+diskd --json project delete <project-id> --yes
+```
+
+Calls the canonical platform Projects REST API. `get`, `update`, and `delete`
+require a project ID; display names are never used as mutation identity.
 
 ### `set-context --list`
 
@@ -159,6 +175,29 @@ diskd --json get-context
 ```
 
 Prints the stored project context or the workspace root default.
+
+## Project Sessions
+
+Session commands require `--project <id>` or a saved project context. The
+adapter derives Drive `root_path`; callers provide only project, session, and
+message IDs.
+
+```sh
+diskd --json session list
+diskd --json session read <session-id>
+diskd --json session read <session-id> --limit 20
+diskd --json session messages <session-id> --limit 20 [--before <message-id>]
+diskd --json session save <session-document.json> [--attribute <value>...]
+diskd --json session append <session-id> <messages.json>
+diskd --json session remove <session-id> <message-id>...
+diskd --json session rollback <session-id> <after-message-id>
+diskd --json session delete <session-id> --yes
+```
+
+Unbounded `read` calls `drive/session/get`; `read --limit` calls
+`drive/session/get-preview`; `messages` calls
+`drive/session/get-message-range`. `remove` and `rollback` are separate
+variants and cannot produce a request containing both deletion modes.
 
 ## Path Rules
 
@@ -271,6 +310,17 @@ diskd cat docs/report.pdf > report.pdf
 
 Calls `drive/files/download-url`, then downloads and streams the returned URL to
 stdout.
+
+### `download`
+
+```sh
+diskd --json download docs/report.pdf ./report.pdf
+diskd --json download docs/report.pdf ./report.pdf --version 3 --force
+```
+
+Streams the authenticated download into a temporary file beside the target,
+flushes it, and atomically persists the destination. Existing destinations are
+rejected unless `--force` is supplied.
 
 ### `read`
 

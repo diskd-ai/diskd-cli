@@ -36,6 +36,13 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tar::Archive;
+use tempfile::NamedTempFile;
+
+mod projects;
+mod sessions;
+
+use projects::{run_project_command, ProjectCommand};
+use sessions::{run_session_command, SessionCommand};
 
 const DEFAULT_BASE_URL: &str = "https://apis.iosya.com";
 const DEFAULT_LOGIN_APP_URL: &str = "https://app.iosya.com/oauth-apps";
@@ -51,6 +58,8 @@ const TOKEN_SCOPES: &[&str] = &[
     "drive:write",
     "projects:read",
     "projects:write",
+    "sessions:read",
+    "sessions:write",
 ];
 
 /// Parses command-line flags and dispatches the requested diskd operation.
@@ -58,7 +67,7 @@ const TOKEN_SCOPES: &[&str] = &[
 #[command(
     name = "diskd",
     version,
-    about = "Command-line client for the diskd drive"
+    about = "Command-line client for diskd platform and Drive APIs"
 )]
 struct Cli {
     #[arg(short = 'w', long)]
@@ -140,6 +149,14 @@ enum Command {
         #[arg(long)]
         version: Option<u64>,
     },
+    Download {
+        path: String,
+        destination: PathBuf,
+        #[arg(long)]
+        version: Option<u64>,
+        #[arg(long)]
+        force: bool,
+    },
     Read {
         path: String,
         #[arg(long, alias = "limit")]
@@ -162,6 +179,14 @@ enum Command {
     TelegramDb {
         #[command(subcommand)]
         command: TelegramDbCommand,
+    },
+    Project {
+        #[command(subcommand)]
+        command: ProjectCommand,
+    },
+    Session {
+        #[command(subcommand)]
+        command: SessionCommand,
     },
     Upload {
         local: Vec<PathBuf>,
@@ -449,6 +474,8 @@ fn run() -> Result<()> {
             root,
         } => set_context(&cli, &mut state, project.as_deref(), *list, *root),
         Command::GetContext => get_context(&cli, &state),
+        Command::Project { command } => run_project_command(command, &cli, &mut state),
+        Command::Session { command } => run_session_command(command, &cli, &state),
         Command::Mcp {
             command: McpCommand::Serve,
         } => run_mcp_serve(&cli, &state),
@@ -554,9 +581,22 @@ fn run_drive_command(cli: &Cli, state: &RuntimeState) -> Result<()> {
             let path = normalize_drive_path(&context, Some(path))?;
             let result = client.call_drive(&download_url_request(path.as_str(), *version))?;
             let url = read_string_field(&result, "url")?;
-            let bytes = client.download_bytes(&url)?;
-            io::stdout().write_all(&bytes)?;
+            let stdout = io::stdout();
+            let mut writer = stdout.lock();
+            client.download_to_writer(&url, &mut writer)?;
+            writer.flush()?;
             Ok(())
+        }
+        Command::Download {
+            path,
+            destination,
+            version,
+            force,
+        } => {
+            let path = normalize_drive_path(&context, Some(path))?;
+            let result =
+                download_drive_file(&mut client, path.as_str(), destination, *version, *force)?;
+            render_value(&result, cli.json)
         }
         Command::Read {
             path,
@@ -1763,16 +1803,67 @@ fn copy_drive_file(
 ) -> Result<Value> {
     let download = client.call_drive(&download_url_request(src_path, None))?;
     let url = read_string_field(&download, "url")?;
-    let bytes = client.download_bytes(&url)?;
+    let mut temporary = NamedTempFile::new().context("failed to create copy staging file")?;
+    client.download_to_writer(&url, temporary.as_file_mut())?;
+    temporary
+        .as_file_mut()
+        .flush()
+        .context("failed to flush copy staging file")?;
     let (parent, name) = split_drive_parent_name(dst_path)?;
-    upload_bytes(
+    upload_local_file(
         client,
         parent.as_deref().unwrap_or("/"),
         &name,
         "application/octet-stream",
-        bytes,
+        temporary.path(),
         force,
     )
+}
+
+/// Downloads a Drive file atomically to an explicit local destination.
+fn download_drive_file(
+    client: &mut GatewayClient,
+    drive_path: &str,
+    destination: &Path,
+    version: Option<u64>,
+    force: bool,
+) -> Result<Value> {
+    if destination.exists() && !force {
+        bail!(
+            "download destination already exists: {}; use --force",
+            destination.display()
+        );
+    }
+    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    if !parent.is_dir() {
+        bail!(
+            "download destination directory does not exist: {}",
+            parent.display()
+        );
+    }
+
+    let download = client.call_drive(&download_url_request(drive_path, version))?;
+    let url = read_string_field(&download, "url")?;
+    let mut temporary = NamedTempFile::new_in(parent).with_context(|| {
+        format!(
+            "failed to create download staging file in {}",
+            parent.display()
+        )
+    })?;
+    let bytes_written = client.download_to_writer(&url, temporary.as_file_mut())?;
+    temporary
+        .as_file_mut()
+        .flush()
+        .with_context(|| format!("failed to flush download for {}", destination.display()))?;
+    temporary
+        .persist(destination)
+        .map_err(|error| error.error)
+        .with_context(|| format!("failed to persist download to {}", destination.display()))?;
+
+    Ok(json!({
+        "path": destination,
+        "bytesWritten": bytes_written,
+    }))
 }
 
 /// Uploads multiple local files under the requested Drive destination directory.
@@ -1784,8 +1875,6 @@ fn upload_files(
 ) -> Result<Vec<Value>> {
     let mut results = Vec::new();
     for file in files {
-        let bytes = fs::read(&file.local_path)
-            .with_context(|| format!("failed to read {}", file.local_path.display()))?;
         let name = file
             .relative_path
             .file_name()
@@ -1796,31 +1885,46 @@ fn upload_files(
         let mime = mime_guess::from_path(&file.local_path)
             .first_or_octet_stream()
             .to_string();
-        results.push(upload_bytes(client, &parent, name, &mime, bytes, force)?);
+        results.push(upload_local_file(
+            client,
+            &parent,
+            name,
+            &mime,
+            &file.local_path,
+            force,
+        )?);
     }
     Ok(results)
 }
 
-/// Uploads a byte buffer using Drive's start, PUT, and commit contract.
-fn upload_bytes(
+/// Uploads one local file using Drive's start, streamed PUT, and commit contract.
+fn upload_local_file(
     client: &mut GatewayClient,
     parent_path: &str,
     name: &str,
     mime_type: &str,
-    bytes: Vec<u8>,
+    local_path: &Path,
     force: bool,
 ) -> Result<Value> {
-    let hash = sha256_hex(&bytes);
+    let (size, hash) = sha256_file(local_path)?;
     let start = client.call_drive(&upload_start_request(
         name,
-        bytes.len() as u64,
+        size,
         &hash,
         Some(parent_path),
         Some(mime_type),
         Some(force),
     ))?;
     let intent = decode_upload_start(&start)?;
-    let etag = client.put_upload(&intent.upload_url, &intent.intent_id, mime_type, bytes)?;
+    let reader = fs::File::open(local_path)
+        .with_context(|| format!("failed to open {} for upload", local_path.display()))?;
+    let etag = client.put_upload_reader(
+        &intent.upload_url,
+        &intent.intent_id,
+        mime_type,
+        size,
+        reader,
+    )?;
     let commit = client.call_drive(&upload_commit_request(&intent.intent_id, &etag))?;
     Ok(commit)
 }
@@ -1902,7 +2006,33 @@ fn collect_directory_files(root: &Path, dir: &Path, files: &mut Vec<UploadFile>)
     Ok(())
 }
 
-/// Computes the hex SHA-256 digest required by drive/upload/start.
+/// Computes the size and SHA-256 digest without retaining a whole file in memory.
+fn sha256_file(path: &Path) -> Result<(u64, String)> {
+    let mut reader = BufReader::new(
+        fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?,
+    );
+    let mut digest = Sha256::new();
+    let mut total = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .with_context(|| format!("failed to hash {}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+        total += read as u64;
+    }
+    let hash = digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    Ok((total, hash))
+}
+
+/// Computes a SHA-256 digest for bounded in-memory release metadata and archives.
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
@@ -2902,6 +3032,17 @@ fn join_drive_path(base: &str, segment: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn requests_project_drive_and_session_scopes() {
+        /* REQ-DISKD-CLI-038: New browser/client-credentials logins must request every scope needed by project, Drive, and session commands. */
+        assert!(TOKEN_SCOPES.contains(&"drive:read"));
+        assert!(TOKEN_SCOPES.contains(&"drive:write"));
+        assert!(TOKEN_SCOPES.contains(&"projects:read"));
+        assert!(TOKEN_SCOPES.contains(&"projects:write"));
+        assert!(TOKEN_SCOPES.contains(&"sessions:read"));
+        assert!(TOKEN_SCOPES.contains(&"sessions:write"));
+    }
 
     #[test]
     fn compares_release_versions_numerically() {

@@ -1,11 +1,11 @@
 ---
 name: diskd-cli
-description: diskd CLI (`diskd`) usage for the diskd Drive API through the public apis-service gateway. Use when listing, rendering trees, reading, searching, uploading, syncing, copying, moving, or deleting Drive files from the command line; running exact/BM25 search (`grep`), semantic search (`vsearch`), or natural-language (plain-English) questions over indexed CSV/TSV/XLS/XLSX spreadsheets where the Drive backend generates the SQL (`biquery`); creating, inserting, querying, committing, rolling back, inspecting, dropping, resolving, or setting status on generic Drive DBs (`database`, alias `db`) and Telegram Drive DBs (`telegram-db`); managing auth (`login`/`logout`/`whoami`), project context (`set-context`/`get-context`), self-update (`update`), JSON output for scripts (`--json`), or the embedded MCP stdio server (`diskd mcp serve`). Triggers on mentions of diskd, diskd CLI, `diskd ls/tree/cat/read/grep/vsearch/biquery/database/db/telegram-db/upload/sync`, the diskd drive, or adding diskd as an MCP server to an agent.
+description: diskd CLI (`diskd`) usage for platform Projects, project-scoped Drive Sessions, and Drive files through the public apis-service gateway. Use when managing projects (`project`), listing or reading sessions (`session list/read/messages`), applying authorized session mutations, listing, reading, downloading, searching, uploading, syncing, copying, moving, or deleting Drive files; running exact/BM25 search (`grep`), semantic search (`vsearch`), natural-language spreadsheet questions (`biquery`), Drive DB operations, auth/context, self-update, JSON output, or the embedded MCP server. Triggers on mentions of diskd, diskd CLI, project/session CLI access, `diskd project/session/download`, Drive commands, or adding diskd as an MCP server to an agent.
 ---
 
 # diskd CLI
 
-`diskd` is a Rust command-line client for the diskd Drive API. It gives humans,
+`diskd` is a Rust command-line client for diskd platform and Drive APIs. It gives humans,
 shell scripts, and coding agents a Unix-style interface for listing, reading,
 searching, uploading, syncing, and querying Drive files through the public
 `apis-service` gateway. Output is human text by default and machine-readable
@@ -36,7 +36,7 @@ works; `diskd ls docs --json` does not.
 curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh | sh
 
 # Pin a version
-curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh | DISKD_VERSION=v0.1.5 sh
+curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh | DISKD_VERSION=v0.2.0 sh
 
 # Custom directory
 curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh | DISKD_INSTALL_DIR="$HOME/bin" sh
@@ -58,8 +58,8 @@ diskd login --token "$APIS_ACCESS_TOKEN"          # non-interactive token login
 diskd --json whoami
 
 # 3. Pick a project as the current path context
-diskd --json set-context --list                   # list accessible projects
-diskd set-context "Project Name"                  # match by name or id
+diskd --json project list                         # list accessible projects
+diskd set-context 01PROJECTID                     # select project path/session scope
 diskd get-context                                 # show current context
 diskd set-context --root                           # clear project, use workspace root
 
@@ -67,9 +67,14 @@ diskd set-context --root                           # clear project, use workspac
 diskd mkdir docs
 diskd upload ./report.pdf --dest docs --force
 diskd ls docs
-diskd cat docs/report.pdf > report.pdf
+diskd --json download docs/report.pdf ./report.pdf
 diskd --json grep "payment terms" docs
 diskd --json vsearch "contract renewal clauses" docs/report.pdf --top 5
+
+# 5. Read sessions in the selected project
+diskd --json session list
+diskd --json session read 01SESSIONID --limit 20
+diskd --json session messages 01SESSIONID --limit 20
 ```
 
 ## Command Surface at a Glance
@@ -82,11 +87,14 @@ diskd --json vsearch "contract renewal clauses" docs/report.pdf --top 5
 | `grep <query> [paths...]` | Exact/BM25 content search. Flags: `--limit`, `--offset`. Paths default to the context root. |
 | `vsearch <query> [paths...]` | Semantic search. Flags: `--limit` (alias `--top`), `--offset`. |
 | `cat <path>` | Stream raw file bytes to stdout. Flag: `--version <n>`. |
+| `download <path> <destination>` | Stream to an atomic local file. Flags: `--version <n>`, `--force`. |
 | `read <path>` | Structured indexed document parts. Flags: `--limit`/`--offset` aliases for `--parts-limit`/`--parts-offset`. |
 | `stat <path>` | Path metadata. |
 | `biquery <question> [paths...]` | Natural-language query over indexed CSV/TSV/XLS/XLSX/mailbox spreadsheets; the backend converts the question to SQL and runs it. |
 | `database <subcommand>` (`db`) | Generic Drive DB lifecycle. Subcommands: `create`, `insert`, `query`, `commit`, `rollback`, `metadata`, `drop`, `set-status`, `resolve-by-inode`, `resolve-with-settings`. |
 | `telegram-db <subcommand>` | Telegram Drive DB lifecycle. Subcommands: `create`, `insert`, `query`, `commit`, `metadata`, `drop`. |
+| `project <subcommand>` | Platform project lifecycle: `list`, `get`, `create`, `update`, `delete`. |
+| `session <subcommand>` | Project-scoped Drive Session operations: `list`, `read`, `messages`, `save`, `append`, `remove`, `rollback`, `delete`. |
 | `upload <local...>` | Upload file(s)/folder(s). Flags: `--dest <dir>`, `--recursive`, `--force`. |
 | `mkdir <path>` | Create a folder. |
 | `rm <path>` | Delete. Flag: `--recursive`. |
@@ -133,6 +141,13 @@ Drive API field. See [references/auth-and-config.md](references/auth-and-config.
   rejected** -- the current Drive grep contract has no matching fields. Do not
   rely on them.
 - **`cat` writes bytes to stdout**, so redirection and pipes work as expected.
+- **Read sessions by domain ID** with `session list`, `session read`, and
+  `session messages`; never construct `.sessions` paths or pass inodes.
+- **Session and project mutations are state-changing.** Run `save`, `append`,
+  `remove`, `rollback`, and `delete` only when authorized. Destructive delete
+  commands require `--yes`.
+- **`download` is atomic** and refuses to replace a local destination unless
+  `--force` is explicitly supplied.
 - **`biquery` takes a plain-language question, not SQL.** The Drive backend
   reads the spreadsheet schema and uses an LLM to generate and run the SQL,
   returning a result table, e.g.

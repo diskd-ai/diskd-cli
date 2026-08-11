@@ -14,7 +14,7 @@ curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh 
 Pinned release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh | DISKD_VERSION=v0.1.5 sh
+curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh | DISKD_VERSION=v0.2.0 sh
 ```
 
 Confirm the binary:
@@ -87,13 +87,13 @@ does not print the token.
 List accessible projects:
 
 ```sh
-diskd --json set-context --list
+diskd --json project list
 ```
 
 Set the current context by project name or id:
 
 ```sh
-diskd set-context "Project Name"
+diskd set-context 01PROJECTID
 ```
 
 Check the current context:
@@ -116,6 +116,15 @@ diskd mkdir notes
 diskd upload ./note.txt --dest notes --force
 diskd ls notes
 diskd cat notes/note.txt
+diskd --json download notes/note.txt ./downloaded-note.txt
+```
+
+Read sessions in the selected project:
+
+```sh
+diskd --json session list
+diskd --json session read 01SESSIONID --limit 20
+diskd --json session messages 01SESSIONID --limit 20
 ```
 
 ## 6. Search

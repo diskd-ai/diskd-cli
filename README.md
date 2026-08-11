@@ -1,9 +1,10 @@
 # diskd CLI
 
-`diskd` is a small Rust command-line client for the diskd Drive API. It gives
+`diskd` is a small Rust command-line client for diskd platform and Drive APIs. It gives
 humans, shell scripts, and coding agents a Unix-style interface for listing,
-reading, searching, uploading, syncing, and querying Drive files through the
-public `apis-service` gateway.
+reading, searching, uploading, syncing, querying Drive files, managing
+projects, and reading or updating project sessions through the public
+`apis-service` gateway.
 
 The CLI is published as the public `diskd-ai/diskd-cli` GitHub repository.
 Release tags build platform archives and SHA-256 checksum files for Linux,
@@ -12,7 +13,9 @@ macOS, and Windows.
 ## What You Can Do
 
 - Browse Drive paths with `ls`, `tree`, `glob`, and `stat`.
-- Stream file bytes with `cat`.
+- Stream file bytes with `cat` or atomically download them to a local file.
+- List, inspect, create, update, and delete platform projects.
+- List, read, page, save, append, roll back, and delete project sessions.
 - Search indexed content with `grep` and `vsearch`.
 - Ask natural-language questions over CSV, TSV, XLS, and XLSX files with `biquery`.
 - Work with generic Drive DBs through `database` (alias `db`).
@@ -33,7 +36,7 @@ curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh 
 Pin a release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh | DISKD_VERSION=v0.1.5 sh
+curl -fsSL https://raw.githubusercontent.com/diskd-ai/diskd-cli/main/install.sh | DISKD_VERSION=v0.2.0 sh
 ```
 
 Install into a custom directory:
@@ -94,8 +97,8 @@ diskd --json whoami
 List projects and select one as the current context:
 
 ```sh
-diskd --json set-context --list
-diskd set-context "Project Name"
+diskd --json project list
+diskd set-context 01PROJECTID
 diskd get-context
 ```
 
@@ -105,10 +108,46 @@ Work with files under that project:
 diskd mkdir docs
 diskd upload ./report.pdf --dest docs --force
 diskd ls docs
-diskd cat docs/report.pdf > report.pdf
+diskd download docs/report.pdf ./report.pdf
 diskd grep "payment terms" docs --limit 10 --offset 0
 diskd vsearch "contract renewal clauses" docs/report.pdf --limit 5 --offset 0
 ```
+
+Read project sessions through the Drive Session API:
+
+```sh
+diskd --json session list
+diskd --json session read 01SESSIONID --limit 20
+diskd --json session messages 01SESSIONID --limit 20 --before 01MESSAGEID
+```
+
+The saved project context supplies session scope. You can override it for one
+command with `diskd --project <project-id> --json session ...`. Public session
+arguments use project, session, and message IDs; Drive storage paths and inodes
+remain internal to the API adapter.
+
+Project lifecycle commands follow the platform SDK fields:
+
+```sh
+diskd --json project list
+diskd --json project get <project-id>
+diskd --json project create <name> [--description <text>] [--icon <value>] [--icon-color <value>]
+diskd --json project update <project-id> [--name <name>] [--description <text>] [--icon <value>] [--icon-color <value>]
+diskd --json project delete <project-id> --yes
+```
+
+Session mutations consume SDK-compatible JSON documents or message arrays:
+
+```sh
+diskd --json session save ./session-document.json [--attribute <value>...]
+diskd --json session append <session-id> ./messages.json
+diskd --json session remove <session-id> <message-id>...
+diskd --json session rollback <session-id> <after-message-id>
+diskd --json session delete <session-id> --yes
+```
+
+Project and session deletion are permanent and require `--yes`. Local download
+replacement requires `--force`.
 
 Global flags must be placed before the subcommand:
 
@@ -125,11 +164,20 @@ diskd glob "**/*.pdf" [--path docs]
 diskd grep "exact text" [path...] --limit 10 --offset 0
 diskd vsearch "semantic query" [path...] --limit 10 --offset 0
 diskd cat path/to/file > local-file
+diskd --json download path/to/file ./local-file [--version 3] [--force]
 diskd read path/to/file --limit 3 --offset 0
 diskd stat path/to/file
 diskd biquery "what is the total amount?" sheet.csv
 diskd --json database query generic-db "SELECT id, text FROM messages LIMIT 20" --db-type telegram
 diskd --json telegram-db query team-chat "SELECT id, text FROM messages LIMIT 20"
+diskd --json project list
+diskd --json project get 01PROJECTID
+diskd --json project create "Project name" --description "Project description"
+diskd --json project update 01PROJECTID --name "Renamed project"
+diskd --json project delete 01PROJECTID --yes
+diskd --project 01PROJECTID --json session list
+diskd --project 01PROJECTID --json session read 01SESSIONID --limit 20
+diskd --project 01PROJECTID --json session messages 01SESSIONID --limit 20
 diskd upload ./file.txt --dest docs --force
 diskd sync ./local-folder --dest docs --once
 diskd update
@@ -146,6 +194,7 @@ See [docs/commands.md](docs/commands.md) for the full command reference.
 - [Configuration and authentication](docs/configuration.md)
 - [MCP server](docs/mcp.md)
 - [Development and releases](docs/development.md)
+- [Agent command instructions](AGENTS.md)
 
 ## Configuration
 

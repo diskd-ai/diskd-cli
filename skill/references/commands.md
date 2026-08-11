@@ -5,10 +5,10 @@ Complete flag-by-flag reference. Global flags always precede the subcommand.
 ## Contents
 
 - [Global flags](#global-flags)
-- [Read and query](#read-and-query): `ls`, `tree`, `glob`, `grep`, `vsearch`, `cat`, `read`, `stat`, `biquery`, `database`, `telegram-db`
+- [Read and query](#read-and-query): `ls`, `tree`, `glob`, `grep`, `vsearch`, `cat`, `download`, `read`, `stat`, `biquery`, `database`, `telegram-db`
 - [Write and manage](#write-and-manage): `upload`, `mkdir`, `rm`, `mv`, `cp`, `sync`
 - [Auth and meta](#auth-and-meta): `login`, `logout`, `whoami`, `version`, `update`
-- [Project context](#project-context): `set-context`, `get-context`
+- [Projects and sessions](#projects-and-sessions): `project`, `session`, `set-context`, `get-context`
 - [MCP](#mcp): `mcp serve`
 
 ## Global flags
@@ -37,6 +37,7 @@ the subcommand, and put command flags after the subcommand.
 | `grep` | `<query> [paths...]` | `--limit <n>`, `--offset <n>`, unsupported parser-only `--ignore-case`, `--files-with-matches` | `paths/tools/grep` with `query`, normalized `paths`, optional `limit`, `offset` | Exact/BM25 indexed document search. Omitted paths search the context root. |
 | `vsearch` | `<query> [paths...]` | `--limit <n>`, `--top <n>` alias, `--offset <n>` | `paths/tools/vsearch` with `query`, normalized `paths`, optional `limit`, `offset` | Semantic search. Prefer file paths when directory vector search is unreliable. |
 | `cat` | `<path>` | `--version <n>` | `drive/files/download-url`, then authenticated byte download | Writes raw bytes to stdout; redirect for binary files. |
+| `download` | `<path> <destination>` | `--version <n>`, `--force` | `drive/files/download-url`, then streamed GET | Atomically persists a local file; refuses collisions without `--force`. |
 | `read` | `<path>` | `--limit <n>`/`--parts-limit <n>`, `--offset <n>`/`--parts-offset <n>` | `paths/tools/read` with `path`, optional `parts_limit`, `parts_offset` | Returns structured parts plus `total_parts`, `next_offset`, `eof`. |
 | `stat` | `<path>` | none | `paths/tools/inode-ls` | Returns path metadata. |
 | `biquery` | `<question> [paths...]` | none | `paths/tools/bi-query` with natural-language `query`, normalized `paths` | Question is not SQL. Use for indexed `.csv`, `.tsv`, `.xls`, `.xlsx`, `.mailbox`. |
@@ -56,6 +57,8 @@ the subcommand, and put command flags after the subcommand.
 | `telegram-db commit` | `<name>` | none | `drive/telegram/commit` | Commits pending DB changes. |
 | `telegram-db metadata` | `<name>` | none | `drive/telegram/metadata` | Returns Telegram DB metadata. |
 | `telegram-db drop` | `<name>` | none | `drive/telegram/drop` | Deletes the Telegram DB. |
+| `project` | subcommand-specific | `list`, `get`, `create`, `update`, `delete` | platform Projects REST | Mutations use project IDs; delete requires `--yes`. |
+| `session` | subcommand-specific | `list`, `read`, `messages`, `save`, `append`, `remove`, `rollback`, `delete` | project-scoped Drive Session JSON-RPC | Read by domain ID; write commands require explicit authorization. |
 | `upload` | `<local...>` one or more files/folders | `--dest <dir>`, `--recursive`, `--force` | `drive/upload/start`, PUT upload URL, `drive/upload/commit` per file | Uploads local files into Drive; `--force` overwrites. |
 | `mkdir` | `<path>` | none | `drive/paths/create` | Creates a Drive folder. |
 | `rm` | `<path>` | `--recursive` | `drive/paths/delete` | Deletes a file or folder. |
@@ -163,6 +166,16 @@ diskd cat docs/report.pdf > report.pdf
 Drive method: `drive/files/download-url`, then streams the returned URL to
 stdout. `--version <n>` selects a specific file version. Bytes go to stdout, so
 redirection and pipes work.
+
+### `download`
+
+```sh
+diskd --json download docs/report.pdf ./report.pdf
+diskd --json download docs/report.pdf ./report.pdf --version 3 --force
+```
+
+Streams to a temporary file next to the destination, flushes it, then persists
+the completed local file. Existing targets require `--force`.
 
 ### `read`
 
@@ -370,7 +383,34 @@ Checks the latest `diskd-ai/diskd-cli` GitHub release, downloads the matching
 platform archive and its `.sha256`, verifies the checksum, and replaces the
 running binary. `--force` reinstalls the latest even when versions match.
 
-## Project context
+## Projects and sessions
+
+### `project`
+
+```sh
+diskd --json project list
+diskd --json project get <project-id>
+diskd --json project create <name> [--description <text>] [--icon <value>] [--icon-color <value>]
+diskd --json project update <project-id> [--name <name>] [--description <text>] [--icon <value>] [--icon-color <value>]
+diskd --json project delete <project-id> --yes
+```
+
+### `session`
+
+```sh
+diskd --project <project-id> --json session list
+diskd --project <project-id> --json session read <session-id> [--limit 20]
+diskd --project <project-id> --json session messages <session-id> --limit 20 [--before <message-id>]
+diskd --project <project-id> --json session save <session-document.json> [--attribute <value>...]
+diskd --project <project-id> --json session append <session-id> <messages.json>
+diskd --project <project-id> --json session remove <session-id> <message-id>...
+diskd --project <project-id> --json session rollback <session-id> <after-message-id>
+diskd --project <project-id> --json session delete <session-id> --yes
+```
+
+Session calls derive Drive `root_path` from project context. Never pass Drive
+paths or inodes as project/session identity. Treat all session commands after
+`messages` as state-changing.
 
 ### `set-context`
 

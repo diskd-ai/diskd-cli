@@ -57,8 +57,8 @@ diskd version
 export APIS_BASE_URL="https://apis.iosya.com"
 diskd login --token "$APIS_ACCESS_TOKEN"
 diskd --json whoami
-diskd --json set-context --list
-diskd set-context "Project Name"
+diskd --json project list
+diskd set-context 01PROJECTID
 ```
 
 ### Work with files
@@ -67,7 +67,9 @@ diskd set-context "Project Name"
 diskd mkdir docs
 diskd upload ./report.pdf --dest docs --force
 diskd ls docs
-diskd cat docs/report.pdf > report.pdf
+diskd --json download docs/report.pdf ./report.pdf
+diskd --json session list
+diskd --json session read 01SESSIONID --limit 20
 diskd --json grep "payment terms" docs
 diskd --json vsearch "renewal clauses" docs/report.pdf --top 5
 diskd --json biquery "what is the total amount?" docs/table.csv

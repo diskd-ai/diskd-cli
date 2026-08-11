@@ -108,6 +108,61 @@ fn write_fixture_file(home: &TempDir, name: &str, contents: &[u8]) -> PathBuf {
     path
 }
 
+/// Builds the smallest SDK-compatible Drive Session message fixture.
+fn session_message_json() -> Value {
+    json!({
+        "id": "message-1",
+        "role": "user",
+        "participant_kind": "user",
+        "participant_id": null,
+        "participant_name": null,
+        "participant_slug": null,
+        "content": "hello",
+        "content_blocks_json": null,
+        "source_origin": null,
+        "turn_correlation_id": null,
+        "turn_context_json": null,
+        "function_call": null,
+        "tool_calls": null,
+        "tool_call_id": null,
+        "context": null,
+        "metadata": null,
+        "attachments": null,
+        "subtype": null,
+        "parent_message_id": null,
+        "is_sidechain": false,
+        "token_count": null,
+        "created_at": "2026-08-11T10:00:00Z",
+        "updated_at": null,
+        "deleted_at": null
+    })
+}
+
+/// Builds the smallest SDK-compatible Drive Session document fixture.
+fn session_document_json() -> Value {
+    json!({
+        "id": "session-1",
+        "workspace_id": "workspace-1",
+        "project_id": "project-1",
+        "title": "Deployment help",
+        "config": {
+            "operative_id": null,
+            "provider": "openai",
+            "model": "gpt-5",
+            "prompt_text": null,
+            "drive_sources_muted": false
+        },
+        "exchanges": [],
+        "participants": [],
+        "messages": [session_message_json()],
+        "created_at": "2026-08-11T10:00:00Z",
+        "updated_at": "2026-08-11T10:01:00Z",
+        "source_origin": null,
+        "fork_source_session_id": null,
+        "fork_source_message_id": null
+    })
+}
+
 /* REQ-DISKD-CLI-015: ls must call the gateway Drive JSON-RPC endpoint with bearer auth, project-normalized paths, and ls-like text output using copyable names, display metadata, and indexing status. */
 #[test]
 fn ls_normalizes_project_path_and_uses_bearer_auth() {
@@ -238,8 +293,8 @@ fn set_context_list_reads_platform_projects() {
         respond_json(
             request,
             json!([
-                { "id": "01PROJECT", "name": "Alpha", "description": "ignored" },
-                { "id": "02PROJECT", "name": "Beta" }
+                { "id": "01PROJECT", "name": "Alpha", "description": "ignored", "updatedAt": "2026-08-11T10:00:00Z" },
+                { "id": "02PROJECT", "name": "Beta", "updatedAt": "2026-08-11T10:00:00Z" }
             ]),
         );
     });
@@ -255,6 +310,338 @@ fn set_context_list_reads_platform_projects() {
     assert!(output.status.success(), "{}", stderr_text(&output));
     let printed: Value = serde_json::from_str(&stdout_text(&output)).unwrap();
     assert_eq!(printed[0], json!({ "id": "01PROJECT", "name": "Alpha" }));
+}
+
+/* REQ-DISKD-CLI-035: Project commands must expose the complete platform-api 6.1.1 REST lifecycle with exact verbs, paths, auth, and camelCase payloads. */
+#[test]
+fn project_commands_run_complete_rest_lifecycle() {
+    let gateway = start_gateway(5, |index, mut request| {
+        assert_eq!(
+            request_header(&request, "Authorization"),
+            "Bearer token-test"
+        );
+        match index {
+            0 => {
+                assert_eq!(request.method().as_str(), "GET");
+                assert_eq!(request.url(), "/v1/platform/projects/api/projects");
+                respond_json(
+                    request,
+                    json!([{ "id": "project-1", "name": "Alpha", "updatedAt": "2026-08-11T10:00:00Z" }]),
+                );
+            }
+            1 => {
+                assert_eq!(request.method().as_str(), "GET");
+                assert_eq!(
+                    request.url(),
+                    "/v1/platform/projects/api/projects/project-1"
+                );
+                respond_json(
+                    request,
+                    json!({ "id": "project-1", "name": "Alpha", "updatedAt": "2026-08-11T10:00:00Z" }),
+                );
+            }
+            2 => {
+                assert_eq!(request.method().as_str(), "POST");
+                assert_eq!(request.url(), "/v1/platform/projects/api/projects");
+                let body = request_json(&mut request);
+                assert_eq!(
+                    body,
+                    json!({ "name": "Alpha", "description": "First project", "iconColor": "blue" })
+                );
+                respond_json(
+                    request,
+                    json!({ "id": "project-1", "name": "Alpha", "description": "First project", "iconColor": "blue", "updatedAt": "2026-08-11T10:00:00Z" }),
+                );
+            }
+            3 => {
+                assert_eq!(request.method().as_str(), "PUT");
+                assert_eq!(
+                    request.url(),
+                    "/v1/platform/projects/api/projects/project-1"
+                );
+                let body = request_json(&mut request);
+                assert_eq!(body, json!({ "name": "Beta" }));
+                respond_json(
+                    request,
+                    json!({ "id": "project-1", "name": "Beta", "updatedAt": "2026-08-11T10:01:00Z" }),
+                );
+            }
+            4 => {
+                assert_eq!(request.method().as_str(), "DELETE");
+                assert_eq!(
+                    request.url(),
+                    "/v1/platform/projects/api/projects/project-1"
+                );
+                respond_json(request, Value::Null);
+            }
+            _ => unreachable!(),
+        }
+    });
+    let home = TempDir::new().unwrap();
+
+    let commands: &[&[&str]] = &[
+        &["--json", "project", "list"],
+        &["--json", "project", "get", "project-1"],
+        &[
+            "--json",
+            "project",
+            "create",
+            "Alpha",
+            "--description",
+            "First project",
+            "--icon-color",
+            "blue",
+        ],
+        &["--json", "project", "update", "project-1", "--name", "Beta"],
+        &["--json", "project", "delete", "project-1", "--yes"],
+    ];
+    for args in commands {
+        let output = run_diskd(&home, &gateway.base_url, args);
+        assert!(output.status.success(), "{}", stderr_text(&output));
+    }
+
+    gateway.join();
+}
+
+/* REQ-DISKD-CLI-036: Session commands must read and mutate project-scoped sessions through the complete Drive Session JSON-RPC contract without exposing root paths to callers. */
+#[test]
+fn session_commands_run_complete_drive_rpc_lifecycle() {
+    let gateway = start_gateway(9, |index, mut request| {
+        assert_eq!(request.method().as_str(), "POST");
+        assert_eq!(request.url(), "/v1/platform/sessions/api/v1");
+        assert_eq!(
+            request_header(&request, "Authorization"),
+            "Bearer token-test"
+        );
+        let body = request_json(&mut request);
+        assert_eq!(body["params"]["root_path"], "/Projects/project-1");
+
+        match index {
+            0 => {
+                assert_eq!(body["method"], "drive/session/list");
+                respond_json(
+                    request,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "result": {
+                            "items": [{
+                                "session_id": "session-1",
+                                "title": "Deployment help",
+                                "message_count": 1,
+                                "updated_at": "2026-08-11T10:01:00Z",
+                                "provider": "openai",
+                                "model": "gpt-5"
+                            }]
+                        }
+                    }),
+                );
+            }
+            1 => {
+                assert_eq!(body["method"], "drive/session/get");
+                assert_eq!(body["params"]["session_id"], "session-1");
+                respond_json(
+                    request,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "result": { "session": session_document_json() }
+                    }),
+                );
+            }
+            2 => {
+                assert_eq!(body["method"], "drive/session/get-preview");
+                assert_eq!(body["params"]["limit"], 1);
+                respond_json(
+                    request,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "result": {
+                            "session": session_document_json(),
+                            "messages": [session_message_json()],
+                            "message_count": 1
+                        }
+                    }),
+                );
+            }
+            3 => {
+                assert_eq!(body["method"], "drive/session/get-message-range");
+                assert_eq!(body["params"]["limit"], 10);
+                assert_eq!(body["params"]["before"], "message-2");
+                respond_json(
+                    request,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "result": { "messages": [session_message_json()], "has_more": false }
+                    }),
+                );
+            }
+            4 => {
+                assert_eq!(body["method"], "drive/session/save");
+                assert_eq!(body["params"]["session"]["project_id"], "project-1");
+                assert_eq!(body["params"]["attributes"], json!(["pinned"]));
+                respond_json(
+                    request,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "result": { "session_id": "session-1", "message_count": 1, "updated_at": "2026-08-11T10:01:00Z" }
+                    }),
+                );
+            }
+            5 => {
+                assert_eq!(body["method"], "drive/session/append-messages");
+                assert_eq!(body["params"]["messages"][0]["id"], "message-1");
+                respond_json(
+                    request,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "result": { "session_id": "session-1", "message_count": 2, "updated_at": "2026-08-11T10:02:00Z" }
+                    }),
+                );
+            }
+            6 => {
+                assert_eq!(body["method"], "drive/session/delete-messages");
+                assert_eq!(body["params"]["message_ids"], json!(["message-1"]));
+                assert!(body["params"].get("rollback_after_message_id").is_none());
+                respond_json(
+                    request,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "result": { "session_id": "session-1", "message_count": 1, "updated_at": "2026-08-11T10:03:00Z" }
+                    }),
+                );
+            }
+            7 => {
+                assert_eq!(body["method"], "drive/session/delete-messages");
+                assert_eq!(body["params"]["rollback_after_message_id"], "message-1");
+                assert!(body["params"].get("message_ids").is_none());
+                respond_json(
+                    request,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "result": { "session_id": "session-1", "message_count": 0, "updated_at": "2026-08-11T10:04:00Z" }
+                    }),
+                );
+            }
+            8 => {
+                assert_eq!(body["method"], "drive/session/delete");
+                respond_json(
+                    request,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "result": { "session_id": "session-1", "status": "deleted" }
+                    }),
+                );
+            }
+            _ => unreachable!(),
+        }
+    });
+    let home = TempDir::new().unwrap();
+    let document_file = write_fixture_file(
+        &home,
+        "session.json",
+        session_document_json().to_string().as_bytes(),
+    );
+    let messages_file = write_fixture_file(
+        &home,
+        "messages.json",
+        json!([session_message_json()]).to_string().as_bytes(),
+    );
+    let document = document_file.to_str().unwrap();
+    let messages = messages_file.to_str().unwrap();
+
+    let commands: Vec<Vec<&str>> = vec![
+        vec!["--project", "project-1", "--json", "session", "list"],
+        vec![
+            "--project",
+            "project-1",
+            "--json",
+            "session",
+            "read",
+            "session-1",
+        ],
+        vec![
+            "--project",
+            "project-1",
+            "--json",
+            "session",
+            "read",
+            "session-1",
+            "--limit",
+            "1",
+        ],
+        vec![
+            "--project",
+            "project-1",
+            "--json",
+            "session",
+            "messages",
+            "session-1",
+            "--limit",
+            "10",
+            "--before",
+            "message-2",
+        ],
+        vec![
+            "--project",
+            "project-1",
+            "--json",
+            "session",
+            "save",
+            document,
+            "--attribute",
+            "pinned",
+        ],
+        vec![
+            "--project",
+            "project-1",
+            "--json",
+            "session",
+            "append",
+            "session-1",
+            messages,
+        ],
+        vec![
+            "--project",
+            "project-1",
+            "--json",
+            "session",
+            "remove",
+            "session-1",
+            "message-1",
+        ],
+        vec![
+            "--project",
+            "project-1",
+            "--json",
+            "session",
+            "rollback",
+            "session-1",
+            "message-1",
+        ],
+        vec![
+            "--project",
+            "project-1",
+            "--json",
+            "session",
+            "delete",
+            "session-1",
+            "--yes",
+        ],
+    ];
+    for args in commands {
+        let output = run_diskd(&home, &gateway.base_url, &args);
+        assert!(output.status.success(), "{}", stderr_text(&output));
+    }
+
+    gateway.join();
 }
 
 /* REQ-DISKD-CLI-017: upload must execute Drive start, upload PUT, then commit with the returned intent and etag. */
@@ -277,7 +664,7 @@ fn upload_runs_start_put_commit_sequence() {
                     "result": {
                         "intent_id": "intent-1",
                         "inode": "inode-1",
-                        "upload_url": "/upload/intent-1",
+                        "upload_url": "/api/v1/drive/upload",
                         "expires_in": 60,
                         "multipart": false
                     }
@@ -286,8 +673,15 @@ fn upload_runs_start_put_commit_sequence() {
         }
         1 => {
             assert_eq!(request.method().as_str(), "PUT");
-            assert_eq!(request.url(), "/v1/os/drive/upload/intent-1");
+            assert_eq!(request.url(), "/v1/os/drive/api/v1/drive/upload");
             assert_eq!(request_header(&request, "X-Upload-Intent-Id"), "intent-1");
+            assert_eq!(request_header(&request, "Content-Length"), "5");
+            let mut body = Vec::new();
+            request
+                .as_reader()
+                .read_to_end(&mut body)
+                .expect("upload body should be readable");
+            assert_eq!(body, b"hello");
             respond_json(request, json!({ "etag": "etag-1" }));
         }
         2 => {
@@ -375,6 +769,59 @@ fn cat_streams_downloaded_bytes() {
     gateway.join();
     assert!(output.status.success(), "{}", stderr_text(&output));
     assert_eq!(output.stdout, b"hello from drive");
+}
+
+/* REQ-DISKD-CLI-037: download must stream Drive bytes into an atomic local file and report the completed byte count. */
+#[test]
+fn download_streams_to_explicit_local_file() {
+    let base_url_holder = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let base_url_for_handler = base_url_holder.clone();
+    let gateway = start_gateway(2, move |index, mut request| match index {
+        0 => {
+            let base_url = base_url_for_handler.lock().unwrap().clone();
+            let body = request_json(&mut request);
+            assert_eq!(body["method"], "drive/files/download-url");
+            assert_eq!(body["params"]["path"], "/Projects/01PROJECT/a.txt");
+            assert_eq!(body["params"]["version"], 3);
+            respond_json(
+                request,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": { "url": format!("{base_url}/download/a.txt"), "expires_in": 60 }
+                }),
+            );
+        }
+        1 => {
+            assert_eq!(request.method().as_str(), "GET");
+            respond_bytes(request, b"downloaded bytes");
+        }
+        _ => unreachable!(),
+    });
+    *base_url_holder.lock().unwrap() = gateway.base_url.clone();
+    let home = TempDir::new().unwrap();
+    let destination = home.path().join("a.txt");
+
+    let output = run_diskd(
+        &home,
+        &gateway.base_url,
+        &[
+            "--project",
+            "01PROJECT",
+            "--json",
+            "download",
+            "a.txt",
+            destination.to_str().unwrap(),
+            "--version",
+            "3",
+        ],
+    );
+
+    gateway.join();
+    assert!(output.status.success(), "{}", stderr_text(&output));
+    assert_eq!(std::fs::read(&destination).unwrap(), b"downloaded bytes");
+    let printed: Value = serde_json::from_str(&stdout_text(&output)).unwrap();
+    assert_eq!(printed["bytesWritten"], 16);
 }
 
 /* REQ-DISKD-CLI-027: read must accept --limit/--offset aliases and send parts_limit/parts_offset to Drive. */
