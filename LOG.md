@@ -1,5 +1,17 @@
 # Completion log
 
+## Unreleased - 2026-10-05
+
+### Fixes
+
+- Login no longer retries silently without scopes when the token issuer
+  answers `invalid_scope`. It now fails, names the rejected gateway scopes,
+  and tells the user to re-fetch credentials with `diskd login` (or a fresh
+  credentials file). Motivation: the silent retry produced tokens that carry no
+  gateway route scopes, which would break once apis-service enforces
+  `required_scopes`. Re-fetching re-registers the CLI client with the route
+  scopes through iam-service.
+
 ## 0.2.0 - 2026-08-11
 
 ### Changes

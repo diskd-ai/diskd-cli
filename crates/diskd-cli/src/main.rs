@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 use diskd_client::{
     biquery_request, database_commit_request, database_create_request, database_drop_request,
@@ -21,7 +21,7 @@ use diskd_client::{
     request_client_credentials_token, telegram_db_commit_request, telegram_db_create_request,
     telegram_db_drop_request, telegram_db_insert_request, telegram_db_metadata_request,
     telegram_db_query_request, upload_commit_request, upload_start_request, vsearch_request,
-    ClientCredentialsTokenParams, GatewayClient, JsonRpcRequest,
+    ClientCredentialsTokenParams, ClientError, GatewayClient, JsonRpcRequest,
 };
 use diskd_config::{
     decode_jwt_identity, format_config_document, format_stored_credentials, normalize_drive_path,
@@ -837,7 +837,7 @@ fn login(
                 format!("failed to read credentials fixture {}", path.display())
             })?;
             let fixture = parse_client_credentials_file(&document)?;
-            request_and_store_client_credentials_token(state, fixture, quiet)?
+            request_and_store_client_credentials_token(state, fixture)?
         }
         (Some(_), Some(_)) => bail!("use either --token or --credentials-file, not both"),
         (None, None) => browser_login(state, dev, app_url, quiet)?,
@@ -849,7 +849,6 @@ fn login(
 fn request_and_store_client_credentials_token(
     state: &mut RuntimeState,
     fixture: ClientCredentialsFile,
-    quiet: bool,
 ) -> Result<String> {
     state.config.base_url = Some(fixture.apis_url.clone());
     let params = ClientCredentialsTokenParams {
@@ -862,23 +861,29 @@ fn request_and_store_client_credentials_token(
             .map(|scope| (*scope).to_owned())
             .collect(),
     };
-    let token = match request_client_credentials_token(&params) {
-        Ok(token) => token,
-        Err(error) if error.to_string().contains("invalid_scope") => {
-            if !quiet {
-                eprintln!(
-                    "requested gateway scopes were rejected by issuer; retrying with client defaults"
-                );
-            }
-            request_client_credentials_token(&ClientCredentialsTokenParams {
-                scopes: Vec::new(),
-                ..params
-            })?
-        }
-        Err(error) => return Err(error.into()),
-    };
+    let token = request_client_credentials_token(&params)
+        .map_err(|error| explain_token_request_error(error, &params.scopes))?;
     save_config(state)?;
     Ok(token)
+}
+
+/// Maps a token endpoint failure to the error shown to the user.
+///
+/// Why: an issuer `invalid_scope` rejection means the stored OAuth client was
+/// registered without the gateway route scopes. Retrying without scopes hid
+/// that and minted tokens the gateway cannot authorize by scope, so the CLI
+/// names the rejected scopes and asks the user to re-fetch credentials, which
+/// re-registers the client with the route scopes.
+fn explain_token_request_error(error: ClientError, scopes: &[String]) -> anyhow::Error {
+    match &error {
+        ClientError::Http { message, .. } if message.contains("invalid_scope") => anyhow!(
+            "token issuer rejected the requested gateway scopes ({}): {error}; \
+             these credentials predate the scope grant, re-fetch them with `diskd login` \
+             (or download a fresh credentials file) and try again",
+            scopes.join(" ")
+        ),
+        _ => error.into(),
+    }
 }
 
 /// Persists a bearer token in the private credentials file.
@@ -929,7 +934,7 @@ fn browser_login(
     }
 
     let fixture = wait_for_browser_credentials(&listener, &login_state, BROWSER_LOGIN_TIMEOUT)?;
-    request_and_store_client_credentials_token(state, fixture, quiet)
+    request_and_store_client_credentials_token(state, fixture)
 }
 
 /// Resolves the app URL used by browser login.
@@ -3042,6 +3047,43 @@ mod tests {
         assert!(TOKEN_SCOPES.contains(&"projects:write"));
         assert!(TOKEN_SCOPES.contains(&"sessions:read"));
         assert!(TOKEN_SCOPES.contains(&"sessions:write"));
+    }
+
+    #[test]
+    fn surfaces_invalid_scope_with_refetch_instruction() {
+        /* REQ-DISKD-CLI-039: An issuer invalid_scope rejection must fail login with the requested scopes and a re-fetch instruction instead of silently retrying without scopes. */
+        let scopes: Vec<String> = TOKEN_SCOPES
+            .iter()
+            .map(|scope| (*scope).to_owned())
+            .collect();
+        let error = explain_token_request_error(
+            ClientError::Http {
+                status: 400,
+                message: "\"invalid_scope\"".to_owned(),
+            },
+            &scopes,
+        );
+        let text = format!("{error:#}");
+
+        assert!(text.contains("invalid_scope"));
+        assert!(text.contains(
+            "drive:read drive:write projects:read projects:write sessions:read sessions:write"
+        ));
+        assert!(text.contains("diskd login"));
+    }
+
+    #[test]
+    fn keeps_other_token_errors_unchanged() {
+        /* REQ-DISKD-CLI-040: Token endpoint failures other than invalid_scope must surface unchanged without a scope re-fetch hint. */
+        let error = explain_token_request_error(
+            ClientError::Http {
+                status: 401,
+                message: "\"invalid_client\"".to_owned(),
+            },
+            &["drive:read".to_owned()],
+        );
+
+        assert_eq!(format!("{error:#}"), "HTTP 401: \"invalid_client\"");
     }
 
     #[test]
