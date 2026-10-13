@@ -196,6 +196,9 @@ enum Command {
         recursive: bool,
         #[arg(long)]
         force: bool,
+        /// Parallel upload workers for bulk ingestion (1 = sequential, per-file results).
+        #[arg(long, default_value_t = 1)]
+        concurrency: usize,
     },
     Mkdir {
         path: String,
@@ -628,9 +631,22 @@ fn run_drive_command(cli: &Cli, state: &RuntimeState) -> Result<()> {
             dest,
             recursive,
             force,
+            concurrency,
         } => {
             let dest = normalize_drive_path(&context, dest.as_deref())?;
             let files = collect_upload_files(local, *recursive)?;
+            if *concurrency > 1 {
+                let report = upload_files_concurrently(
+                    &base_url,
+                    &token,
+                    &mut client,
+                    dest.as_str(),
+                    &files,
+                    *force,
+                    *concurrency,
+                )?;
+                return render_value(&report, cli.json);
+            }
             let results = upload_files(&mut client, dest.as_str(), &files, *force)?;
             render_value(&Value::Array(results), cli.json)
         }
@@ -1934,6 +1950,205 @@ fn upload_local_file(
     Ok(commit)
 }
 
+/// Outcome of one file in a bulk upload: the commit payload or the error text.
+struct BulkOutcome {
+    index: usize,
+    bytes: u64,
+    result: std::result::Result<Value, String>,
+}
+
+/// Summary of a bulk upload (TZ 5.1.2: up to 10 000 documents in one bulk operation).
+#[derive(Debug, Clone, PartialEq)]
+struct BulkReport {
+    files: usize,
+    uploaded: usize,
+    failed: usize,
+    bytes: u64,
+    seconds: f64,
+    concurrency: usize,
+    failures: Vec<(String, String)>,
+}
+
+impl BulkReport {
+    /// Pure: folds per-file outcomes into counts, bytes and the failure list (in file order).
+    fn summarize(
+        files: &[UploadFile],
+        outcomes: &[BulkOutcome],
+        seconds: f64,
+        concurrency: usize,
+    ) -> Self {
+        let mut ordered: Vec<&BulkOutcome> = outcomes.iter().collect();
+        ordered.sort_by_key(|outcome| outcome.index);
+        let mut report = BulkReport {
+            files: files.len(),
+            uploaded: 0,
+            failed: 0,
+            bytes: 0,
+            seconds,
+            concurrency,
+            failures: Vec::new(),
+        };
+        for outcome in ordered {
+            match &outcome.result {
+                Ok(_) => {
+                    report.uploaded += 1;
+                    report.bytes += outcome.bytes;
+                }
+                Err(message) => {
+                    report.failed += 1;
+                    let path = files
+                        .get(outcome.index)
+                        .map(|file| file.relative_path.display().to_string())
+                        .unwrap_or_default();
+                    report.failures.push((path, message.clone()));
+                }
+            }
+        }
+        report
+    }
+
+    fn to_value(&self) -> Value {
+        let rate = if self.seconds > 0.0 {
+            self.uploaded as f64 / self.seconds
+        } else {
+            0.0
+        };
+        json!({
+            "files": self.files,
+            "uploaded": self.uploaded,
+            "failed": self.failed,
+            "bytes": self.bytes,
+            "seconds": self.seconds,
+            "files_per_second": rate,
+            "concurrency": self.concurrency,
+            "failures": self.failures.iter().map(|(path, error)| json!({"path": path, "error": error})).collect::<Vec<_>>(),
+        })
+    }
+}
+
+/// Pure: splits a normalized Drive directory path into its parent and last segment; the
+/// root (or a single segment) has no parent to create under.
+fn split_remote_dir(path: &str) -> Option<(String, String)> {
+    let trimmed = path.trim_end_matches('/');
+    let (parent, name) = trimmed.rsplit_once('/')?;
+    if name.is_empty() {
+        return None;
+    }
+    let parent = if parent.is_empty() {
+        "/".to_owned()
+    } else {
+        parent.to_owned()
+    };
+    Some((parent, name.to_owned()))
+}
+
+/// Creates the destination directory itself (idempotent), so a bulk upload into a fresh
+/// folder does not fail on the first file.
+fn ensure_remote_dir(client: &mut GatewayClient, path: &str) -> Result<()> {
+    let Some((parent, name)) = split_remote_dir(path) else {
+        return Ok(());
+    };
+    match client.call_drive(&path_create_request(&name, Some(&parent), "dir")) {
+        Ok(_) => Ok(()),
+        Err(error) if is_existing_directory_error(&error.to_string()) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Pure: the distinct relative parent directories of the files, first occurrence first, so
+/// bulk uploads create every remote directory once before the workers start.
+fn unique_relative_parents(files: &[UploadFile]) -> Vec<PathBuf> {
+    let mut seen: Vec<PathBuf> = Vec::new();
+    for file in files {
+        if let Some(parent) = file.relative_path.parent() {
+            if parent.as_os_str().is_empty() {
+                continue;
+            }
+            if !seen.iter().any(|known| known == parent) {
+                seen.push(parent.to_path_buf());
+            }
+        }
+    }
+    seen
+}
+
+/// Uploads files with `concurrency` workers, each on its own gateway client. Remote parent
+/// directories are created once up front; failures of single files are reported, not fatal.
+#[allow(clippy::too_many_arguments)]
+fn upload_files_concurrently(
+    base_url: &str,
+    token: &str,
+    client: &mut GatewayClient,
+    dest_root: &str,
+    files: &[UploadFile],
+    force: bool,
+    concurrency: usize,
+) -> Result<Value> {
+    ensure_remote_dir(client, dest_root)?;
+    for parent in unique_relative_parents(files) {
+        ensure_remote_parent_dirs(client, dest_root, &parent.join("placeholder"))?;
+    }
+    let started = Instant::now();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let outcomes: std::sync::Mutex<Vec<BulkOutcome>> = std::sync::Mutex::new(Vec::new());
+    let workers = concurrency.min(files.len().max(1));
+    thread::scope(|scope| -> Result<()> {
+        let mut handles = Vec::new();
+        for _ in 0..workers {
+            let next = &next;
+            let outcomes = &outcomes;
+            let mut worker = GatewayClient::new(base_url, token)?;
+            handles.push(scope.spawn(move || loop {
+                let index = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let Some(file) = files.get(index) else {
+                    break;
+                };
+                let bytes = fs::metadata(&file.local_path)
+                    .map(|meta| meta.len())
+                    .unwrap_or(0);
+                let result = upload_one_for_bulk(&mut worker, dest_root, file, force)
+                    .map_err(|error| error.to_string());
+                outcomes
+                    .lock()
+                    .expect("bulk outcomes lock")
+                    .push(BulkOutcome {
+                        index,
+                        bytes,
+                        result,
+                    });
+            }));
+        }
+        for handle in handles {
+            handle
+                .join()
+                .map_err(|_| anyhow!("bulk upload worker panicked"))?;
+        }
+        Ok(())
+    })?;
+    let collected = outcomes.into_inner().expect("bulk outcomes lock");
+    let report = BulkReport::summarize(files, &collected, started.elapsed().as_secs_f64(), workers);
+    Ok(report.to_value())
+}
+
+/// One bulk upload unit: name, parent and MIME resolution plus the start/PUT/commit contract.
+fn upload_one_for_bulk(
+    client: &mut GatewayClient,
+    dest_root: &str,
+    file: &UploadFile,
+    force: bool,
+) -> Result<Value> {
+    let name = file
+        .relative_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("upload source has no file name")?;
+    let parent = remote_parent_for(dest_root, &file.relative_path)?;
+    let mime = mime_guess::from_path(&file.local_path)
+        .first_or_octet_stream()
+        .to_string();
+    upload_local_file(client, &parent, name, &mime, &file.local_path, force)
+}
+
 /// Recursively creates parent directories required by nested upload targets.
 fn ensure_remote_parent_dirs(
     client: &mut GatewayClient,
@@ -3037,6 +3252,96 @@ fn join_drive_path(base: &str, segment: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bulk_upload_creates_each_remote_parent_once_in_order() {
+        /* REQ-DISKD-CLI-040: A bulk upload plans the distinct relative parent directories once, in first-seen order, and skips top-level files. */
+        let files = vec![
+            UploadFile {
+                local_path: PathBuf::from("/tmp/a.txt"),
+                relative_path: PathBuf::from("a.txt"),
+            },
+            UploadFile {
+                local_path: PathBuf::from("/tmp/docs/b.txt"),
+                relative_path: PathBuf::from("docs/b.txt"),
+            },
+            UploadFile {
+                local_path: PathBuf::from("/tmp/docs/c.txt"),
+                relative_path: PathBuf::from("docs/c.txt"),
+            },
+            UploadFile {
+                local_path: PathBuf::from("/tmp/docs/sub/d.txt"),
+                relative_path: PathBuf::from("docs/sub/d.txt"),
+            },
+        ];
+        assert_eq!(
+            unique_relative_parents(&files),
+            vec![PathBuf::from("docs"), PathBuf::from("docs/sub")]
+        );
+    }
+
+    #[test]
+    fn bulk_upload_splits_the_destination_into_parent_and_name() {
+        /* REQ-DISKD-CLI-042: The destination directory of a bulk upload is created under its parent before any file is sent; the root and empty names have nothing to create. */
+        assert_eq!(
+            split_remote_dir("/Projects/01P/bulk"),
+            Some(("/Projects/01P".to_owned(), "bulk".to_owned()))
+        );
+        assert_eq!(
+            split_remote_dir("/docs/"),
+            Some(("/".to_owned(), "docs".to_owned()))
+        );
+        assert_eq!(split_remote_dir("/"), None);
+        assert_eq!(split_remote_dir("docs"), None);
+    }
+
+    #[test]
+    fn bulk_report_counts_uploads_bytes_and_failures_in_file_order() {
+        /* REQ-DISKD-CLI-041: The bulk report counts uploaded and failed files, sums bytes of the uploaded ones only, lists failures by relative path in file order and reports the rate. */
+        let files = vec![
+            UploadFile {
+                local_path: PathBuf::from("/tmp/one.txt"),
+                relative_path: PathBuf::from("one.txt"),
+            },
+            UploadFile {
+                local_path: PathBuf::from("/tmp/two.txt"),
+                relative_path: PathBuf::from("two.txt"),
+            },
+            UploadFile {
+                local_path: PathBuf::from("/tmp/three.txt"),
+                relative_path: PathBuf::from("three.txt"),
+            },
+        ];
+        let outcomes = vec![
+            BulkOutcome {
+                index: 2,
+                bytes: 30,
+                result: Err("timeout".to_owned()),
+            },
+            BulkOutcome {
+                index: 0,
+                bytes: 10,
+                result: Ok(json!({"inode": "i1"})),
+            },
+            BulkOutcome {
+                index: 1,
+                bytes: 20,
+                result: Ok(json!({"inode": "i2"})),
+            },
+        ];
+        let report = BulkReport::summarize(&files, &outcomes, 4.0, 8);
+        assert_eq!(report.files, 3);
+        assert_eq!(report.uploaded, 2);
+        assert_eq!(report.failed, 1);
+        assert_eq!(report.bytes, 30);
+        assert_eq!(
+            report.failures,
+            vec![("three.txt".to_owned(), "timeout".to_owned())]
+        );
+        let value = report.to_value();
+        assert_eq!(value["files_per_second"], json!(0.5));
+        assert_eq!(value["concurrency"], json!(8));
+    }
 
     #[test]
     fn requests_project_drive_and_session_scopes() {
